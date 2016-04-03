@@ -1,0 +1,139 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>com.pushtechnology.consulting</groupId>
+	<artifactId>java-benchmark-suite</artifactId>
+	<name>Java Benchmark Suite</name>
+	<version>0.6.0-SNAPSHOT</version>
+	<packaging>jar</packaging>
+
+	<properties>
+		<DIFFUSION_HOME>${env.DIFFUSION_HOME}</DIFFUSION_HOME>
+		<diffusion.version>5.6.6</diffusion.version>
+		<source.java.version>1.8</source.java.version>
+		<target.java.version>${source.java.version}</target.java.version>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<!-- http://mvnrepository.com/artifact/junit/junit -->
+		<dep.junit.junit.version>4.12</dep.junit.junit.version>
+		<!-- http://mvnrepository.com/artifact/org.apache.commons/commons-lang3 -->
+		<dep.org-apache-commons.commons-lang3.version>3.4</dep.org-apache-commons.commons-lang3.version>
+		<!-- http://mvnrepository.com/artifact/joda-time/joda-time -->
+		<dep.joda-time.joda-time.version>2.9.2</dep.joda-time.joda-time.version>
+		<!-- http://mvnrepository.com/artifact/org.slf4j/slf4j-simple/1.7.19 -->
+		<dep.org-slf4j.slf4j-simple.version>1.7.19</dep.org-slf4j.slf4j-simple.version>
+	</properties>
+
+	<repositories>
+		<repository>
+			<id>push-repository</id>
+			<url>http://download.pushtechnology.com/maven</url>
+		</repository>
+	</repositories>
+
+	<pluginRepositories>
+		<pluginRepository>
+			<id>push-repository</id>
+			<url>http://download.pushtechnology.com/maven</url>
+		</pluginRepository>
+	</pluginRepositories>
+
+	<dependencies>
+
+		<dependency>
+			<groupId>com.pushtechnology.diffusion</groupId>
+			<artifactId>diffusion-client</artifactId>
+			<version>${diffusion.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>junit</groupId>
+			<artifactId>junit</artifactId>
+			<version>${dep.junit.junit.version}</version>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>${dep.org-apache-commons.commons-lang3.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>joda-time</groupId>
+			<artifactId>joda-time</artifactId>
+			<version>${dep.joda-time.joda-time.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-simple</artifactId>
+			<version>${dep.org-slf4j.slf4j-simple.version}</version>
+		</dependency>
+
+	</dependencies>
+
+	<build>
+		<defaultGoal>clean install</defaultGoal>
+
+		<plugins>
+			<plugin>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>${source.java.version}</source>
+					<target>${target.java.version}</target>
+				</configuration>
+			</plugin>
+
+			<plugin>
+				<artifactId>maven-jar-plugin</artifactId>
+				<configuration>
+					<archive>
+						<manifest>
+							<addClasspath>true</addClasspath>
+							<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+							<addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+						</manifest>
+					</archive>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>jar</goal>
+							<goal>test-jar</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<plugin>
+				<artifactId>maven-assembly-plugin</artifactId>
+				<executions>
+					<execution>
+						<phase>package</phase>
+						<goals>
+							<goal>single</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<archive>
+						<manifest>
+							<mainClass>com.pushtechnology.consulting.Benchmarker</mainClass>
+							<addClasspath>true</addClasspath>
+							<addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+							<addDefaultSpecificationEntries>true</addDefaultSpecificationEntries>
+						</manifest>
+					</archive>
+					<descriptorRefs>
+						<descriptorRef>jar-with-dependencies</descriptorRef>
+					</descriptorRefs>
+					<finalName>benchmark-${project.version}</finalName>
+					<appendAssemblyId>false</appendAssemblyId>
+				</configuration>
+			</plugin>
+
+		</plugins>
+	</build>
+
+</project>
