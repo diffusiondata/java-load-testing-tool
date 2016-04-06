@@ -47,6 +47,8 @@ public class SessionCreator {
 	public final AtomicInteger recoveringSessions = new AtomicInteger();
 	public final AtomicInteger closedSessions = new AtomicInteger(0);
 	public final AtomicInteger connectionFailures = new AtomicInteger(0);
+	public final AtomicInteger messageCount = new AtomicInteger(0);
+	public final AtomicInteger messageByteCount = new AtomicInteger(0);
 
 	public CreatorState state;
 
@@ -210,6 +212,8 @@ public class SessionCreator {
 											@Override
 											public void onTopicUpdate(String topic, Content content, UpdateContext context) {
 												Out.d("Update for topic '%s'", topic);
+												messageCount.incrementAndGet();
+												messageByteCount.addAndGet(content.length());
 											}
 
 											@Override

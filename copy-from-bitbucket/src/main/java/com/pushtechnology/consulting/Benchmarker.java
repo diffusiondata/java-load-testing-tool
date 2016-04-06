@@ -125,6 +125,8 @@ public class Benchmarker {
 					Out.t("sessionsCounter fired");
 					Out.i("====== Session Status ======");
 					Out.i("       %d connected", sessionCreator.connectedSessions.get());
+					Out.i("       %d message since", sessionCreator.messageCount.getAndSet(0));
+					Out.i("       %d message bytes since", sessionCreator.messageByteCount.getAndSet(0));
 					Out.i("       %d reconnecting", sessionCreator.recoveringSessions.get());
 					Out.i("       %d closed", sessionCreator.closedSessions.get());
 					Out.i("       %d failed to start", sessionCreator.connectionFailures.get());
