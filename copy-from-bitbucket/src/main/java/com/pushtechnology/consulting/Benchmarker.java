@@ -1,8 +1,5 @@
 package com.pushtechnology.consulting;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -11,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -67,8 +65,9 @@ public class Benchmarker {
 	private static final int CLIENT_INBOUND_QUEUE_CORE_SIZE = 16;
 	private static final int CLIENT_INBOUND_QUEUE_MAX_SIZE = 16;
 	private static final String CLIENT_INBOUND_THREAD_POOL_NAME = "JavaBenchmarkInboundThreadPool";
+	private static final CountDownLatch RUNNING_LATCH = new CountDownLatch(1);
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws InterruptedException {
 		Out.i("Starting Java Benchmark Suite v%s", Out.version);
 		parseArgs(args);
 
@@ -160,12 +159,7 @@ public class Benchmarker {
 			}, 2L, 5L, TimeUnit.SECONDS);
 		}
 
-		Out.i("Press any key to exit...");
-		try {
-			(new BufferedReader(new InputStreamReader(System.in))).readLine();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+		RUNNING_LATCH.await();
 
 		if (doPublish) {
 			publisher.shutdown();

@@ -52,13 +52,13 @@ public class SessionCreator {
 
 	public CreatorState state;
 
-	public SessionCreator(String connectionString, List<String> topics) {
+	public SessionCreator(String connectionString, List<String> topicSelectors) {
 		Out.t("SessionCreator constructor...");
 
 		this.connectionString = connectionString;
-		Out.i("Creating sessions listening to topics: '%s'", StringUtils.join(topics, ", "));
-		for (String top : topics) {
-			this.topicSelectors.add(Diffusion.topicSelectors().parse(">" + top));
+		Out.i("Creating sessions listening to topic selectors: '%s'", StringUtils.join(topicSelectors, ", "));
+		for (String topicSelector : topicSelectors) {
+			this.topicSelectors.add(Diffusion.topicSelectors().parse(topicSelector));
 		}
 
 		this.sessionFactory = Diffusion.sessions().inputBufferSize(Integer.getInteger("bench.input.buffer.size", DEFAULT_MAXIMUM_MESSAGE_SIZE))

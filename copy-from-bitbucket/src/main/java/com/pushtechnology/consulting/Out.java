@@ -1,8 +1,5 @@
 package com.pushtechnology.consulting;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -111,12 +108,6 @@ public class Out {
 
 	public static void exit(int exitCode) {
 		d("Exiting with status: '%d'", exitCode);
-		System.out.println("Press any key to exit...");
-		try {
-			(new BufferedReader(new InputStreamReader(System.in))).readLine();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
 		System.exit(exitCode);
 	}
 
