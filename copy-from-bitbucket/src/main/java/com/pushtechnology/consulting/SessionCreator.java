@@ -50,6 +50,11 @@ public class SessionCreator {
 	public final AtomicInteger messageCount = new AtomicInteger(0);
 	public final AtomicInteger messageByteCount = new AtomicInteger(0);
 
+	// http://developer.reappt.io/docs/manual/html/developerguide/client/concepts/uci_reconnect.html
+	private final int maxReconnectionIntervalSec = 10;
+	// Set the maximum amount of time we'll try and reconnect for to 10 minutes.
+	private final int maximumTimeoutDurationMs = 1000 * 60 * 10;
+
 	public CreatorState state;
 
 	public SessionCreator(String connectionString, List<String> topicSelectors) {
@@ -73,9 +78,11 @@ public class SessionCreator {
 							public void run() {
 								reconnection.start();
 							}
-						}, getRandomReconnect(10), TimeUnit.SECONDS);
+						}, getRandomReconnect(maxReconnectionIntervalSec), TimeUnit.SECONDS);
 					}
-				}).errorHandler(new ErrorHandler() {
+				})
+				.reconnectionTimeout(maximumTimeoutDurationMs)
+				.errorHandler(new ErrorHandler() {
 
 					@Override
 					public void onError(Session session, SessionError err) {
