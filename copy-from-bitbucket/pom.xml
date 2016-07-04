@@ -9,8 +9,7 @@
 	<packaging>jar</packaging>
 
 	<properties>
-		<DIFFUSION_HOME>${env.DIFFUSION_HOME}</DIFFUSION_HOME>
-		<diffusion.version>5.7.1</diffusion.version>
+		<diffusion.version>${env.DIFFUSION_VERSION}</diffusion.version>
 		<source.java.version>1.8</source.java.version>
 		<target.java.version>${source.java.version}</target.java.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -20,8 +19,7 @@
 		<dep.org-apache-commons.commons-lang3.version>3.4</dep.org-apache-commons.commons-lang3.version>
 		<!-- http://mvnrepository.com/artifact/joda-time/joda-time -->
 		<dep.joda-time.joda-time.version>2.9.2</dep.joda-time.joda-time.version>
-		<!-- http://mvnrepository.com/artifact/org.slf4j/slf4j-simple/1.7.19 -->
-		<dep.org-slf4j.slf4j-simple.version>1.7.19</dep.org-slf4j.slf4j-simple.version>
+                <log4j.version>2.4.1</log4j.version>
 	</properties>
 
 	<repositories>
@@ -65,11 +63,17 @@
 			<version>${dep.joda-time.joda-time.version}</version>
 		</dependency>
 
-		<dependency>
-			<groupId>org.slf4j</groupId>
-			<artifactId>slf4j-simple</artifactId>
-			<version>${dep.org-slf4j.slf4j-simple.version}</version>
-		</dependency>
+            	<dependency>
+                	<groupId>org.apache.logging.log4j</groupId>
+                	<artifactId>log4j-slf4j-impl</artifactId>
+                	<version>${log4j.version}</version>
+            	</dependency>
+
+            	<dependency>
+                	<groupId>org.apache.logging.log4j</groupId>
+                	<artifactId>log4j-core</artifactId>
+                	<version>${log4j.version}</version>
+            	</dependency>
 
 	</dependencies>
 

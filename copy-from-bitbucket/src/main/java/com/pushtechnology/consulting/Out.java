@@ -7,7 +7,7 @@ import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
-import org.slf4j.impl.SimpleLoggerFactory;
+import org.slf4j.LoggerFactory;
 
 public class Out {
 
@@ -66,12 +66,12 @@ public class Out {
 	}
 
 	public static void useSlf4j() {
-		SimpleLoggerFactory factory = new SimpleLoggerFactory();
-		logMap.put(Benchmarker.class.getName(), factory.getLogger(Benchmarker.class.getName()));
-		logMap.put(ControlClientCreator.class.getName(), factory.getLogger(ControlClientCreator.class.getName()));
-		logMap.put(Publisher.class.getName(), factory.getLogger(Publisher.class.getName()));
-		logMap.put(SessionCreator.class.getName(), factory.getLogger(SessionCreator.class.getName()));
-		defaultLog = factory.getLogger(Out.class.getName());
+		//SimpleLoggerFactory factory = new SimpleLoggerFactory();
+		logMap.put(Benchmarker.class.getName(), LoggerFactory.getLogger(Benchmarker.class.getName()));
+		logMap.put(ControlClientCreator.class.getName(), LoggerFactory.getLogger(ControlClientCreator.class.getName()));
+		logMap.put(Publisher.class.getName(), LoggerFactory.getLogger(Publisher.class.getName()));
+		logMap.put(SessionCreator.class.getName(), LoggerFactory.getLogger(SessionCreator.class.getName()));
+		defaultLog = LoggerFactory.getLogger(Out.class.getName());
 
 		Out.slf4j = true;
 	}
@@ -81,9 +81,7 @@ public class Out {
 		System.out.println("");
 		System.out.println("Usage: JavaBenchmarkSuite.jar [params]");
 		System.out.println("     -logLevel [level] => sets default log level to given level (default: info)");
-		System.out.println("     -slf4j [level] => uses slf4j logging at the given level ((default: false)");
-		System.out.println("          Respected log levels are (from most to least verbose): ");
-		System.out.println("               trace | debug | info | warn | error ");
+		System.out.println("     -slf4j => uses slf4j logging ((default: false)");
 		System.out.println("          You must use the -Dorg.slf4j.simpleLogger.defaultLogLevel=<level> to set the level ");
 		System.out.println("     -publish [connectionString] <username> <password> => enables the publisher for");
 		System.out.println("          the given full connection string (e.g. 'dpt://10.10.10.10:8080') with");
