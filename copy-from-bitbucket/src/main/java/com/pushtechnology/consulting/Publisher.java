@@ -55,11 +55,14 @@ public class Publisher {
 	List<String> topicStandbyList = new ArrayList<>();
 
 	private CreatorState state;
+	private String rootTopic;
 
 	public Publisher(String connectionString, String username, String password, final List<String> topics) {
 		Out.t("Publisher constructor");
 
 		this.connectionString = connectionString;
+		this.rootTopic  = topics.get(0).split("/")[0];
+
 		this.sessionFactory = Diffusion.sessions().connectionTimeout(10000);
 		if (!username.isEmpty()) {
 			this.sessionFactory = this.sessionFactory.principal(username);
@@ -76,12 +79,13 @@ public class Publisher {
 		}).listener(new Listener() {
 
 			@Override
-			public void onSessionStateChanged(Session session, State oldState, State newState) {
+			public void onSessionStateChanged(Session theSession, State oldState, State newState) {
 				Out.t("Publisher#sessionFactory.onSessionStateChanged");
 				Out.d("Session state changed from '%s' to '%s'", oldState, newState);
 				switch (newState) {
 				case CONNECTED_ACTIVE:
 					Out.d("Session state is active registeringTopicControlAndSource...");
+					session = theSession;
 					registerTopicControlAndSource();
 					Out.d("Subscibing to topics...");
 					subscribeToTopics(topics);
@@ -112,7 +116,7 @@ public class Publisher {
 
 		Out.d("Setting up topic control...");
 		this.topicControl = this.session.feature(TopicControl.class);
-		this.topicControl.addMissingTopicHandler(Benchmarker.ROOT_TOPIC, new MissingTopicHandler() {
+		this.topicControl.addMissingTopicHandler(rootTopic, new MissingTopicHandler() {
 
 			@Override
 			public void onClose(String topicPath) {
@@ -138,7 +142,7 @@ public class Publisher {
 
 		Out.d("Setting up topic update control (source)...");
 		this.topicUpdateControl = this.session.feature(TopicUpdateControl.class);
-		this.topicUpdateControl.registerUpdateSource(Benchmarker.ROOT_TOPIC, new UpdateSource() {
+		this.topicUpdateControl.registerUpdateSource(rootTopic, new UpdateSource() {
 
 			@Override
 			public void onClose(String topicPath) {
@@ -164,8 +168,8 @@ public class Publisher {
 				Out.t("Publisher#TopicSource.onActive");
 				onStandby = false;
 				Publisher.this.updater = updater;
-				Out.d("Creating root topic '%s'", Benchmarker.ROOT_TOPIC);
-				createTopic(Benchmarker.ROOT_TOPIC, TopicType.STATELESS);
+				Out.d("Creating root topic '%s'", rootTopic);
+				createTopic(rootTopic, TopicType.SINGLE_VALUE);
 				for (String topic : topicStandbyList) {
 					startFeed(topic);
 				}
@@ -265,6 +269,13 @@ public class Publisher {
 		Out.t("Done Publisher#createTopic");
 	}
 
+	/**
+	 * 1 - path
+	 * 2 - path
+	 * 3 - messageSizeInBytes
+	 * 4 - messagesPerSecond
+	 * @param topicPath
+	 */
 	void startFeed(final String topicPath) {
 		Out.t("Publisher#startFeed for '%s'", topicPath);
 		if (onStandby) {
@@ -274,11 +285,12 @@ public class Publisher {
 		}
 		Out.d("Trying to start feed for: '%s'", topicPath);
 		String[] paths = topicPath.split("/");
-		if (paths.length == 3) {
-			Out.d("Found topicPath '%s' elements: '%s', '%s', '%s'", topicPath, paths[0], paths[1], paths[2]);
-			final int messageSizeInBytes = NumberUtils.toInt(paths[1], -1);
-			final int messagesPerSecond = NumberUtils.toInt(paths[2], -1);
-			if (messageSizeInBytes > 0 && messagesPerSecond > 0) {
+		int expectedLength = 4;
+		if (paths.length == 4) {
+			Out.d("Found topicPath '%s' elements: '%s', '%s', '%s'", topicPath, paths[0]+"/"+paths[1], paths[2], paths[3]);
+			final int messageSizeInBytes = NumberUtils.toInt(paths[2], -1);
+			final int messagesPerSecond = NumberUtils.toInt(paths[3], -1);
+			if (messageSizeInBytes > 0 && messagesPerSecond > 0 && messagesPerSecond<=1000) {
 				Out.d("Using messageSizeInBytes: '%d' and messagesPerSecond: '%d'", messageSizeInBytes, messagesPerSecond);
 				ScheduledFuture<?> tmpFuture;
 				if (topicUpdatersByTopic.containsKey(topicPath)) {
@@ -297,7 +309,7 @@ public class Publisher {
 
 					@Override
 					public void run() {
-						Out.d("Update for topic path: '%s'", topicPath);
+						Out.d("updater.update() for topic path: '%s' %s", topicPath, messageSizeInBytes);
 						Publisher.this.updater.update(topicPath, Diffusion.content().newContent(createSizedByteArray(messageSizeInBytes)),
 								new UpdateCallback() {
 
@@ -320,7 +332,7 @@ public class Publisher {
 						messagesPerSecond);
 			}
 		} else {
-			Out.e("Could not parse topicPath '%s', length was : %d, expected 3!", topicPath, paths.length);
+			Out.e("Could not parse topicPath '%s', length was : %d, expected "+expectedLength+"!", topicPath, paths.length);
 		}
 		Out.t("Done Publisher#startFeed for '%s'", topicPath);
 	}

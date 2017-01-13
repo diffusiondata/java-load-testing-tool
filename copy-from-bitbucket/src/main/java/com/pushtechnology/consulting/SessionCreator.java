@@ -1,16 +1,20 @@
 package com.pushtechnology.consulting;
 
-import static com.pushtechnology.diffusion.client.session.SessionAttributes.DEFAULT_MAXIMUM_MESSAGE_SIZE;
-
+import java.io.File;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -35,7 +39,7 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
 public class SessionCreator {
 
 	private SessionFactory sessionFactory;
-	private String connectionString;
+	private String connectionString[];
 	List<TopicSelector> topicSelectors = new ArrayList<>();
 
 	private List<ScheduledFuture<?>> addSessions = new ArrayList<>();
@@ -46,6 +50,8 @@ public class SessionCreator {
 	public final AtomicInteger connectedSessions = new AtomicInteger(0);
 	public final AtomicInteger recoveringSessions = new AtomicInteger();
 	public final AtomicInteger closedSessions = new AtomicInteger(0);
+	public final AtomicInteger endedSessions = new AtomicInteger(0);
+	public final AtomicInteger startedSessions = new AtomicInteger(0);
 	public final AtomicInteger connectionFailures = new AtomicInteger(0);
 	public final AtomicInteger messageCount = new AtomicInteger(0);
 	public final AtomicInteger messageByteCount = new AtomicInteger(0);
@@ -60,14 +66,25 @@ public class SessionCreator {
 	public SessionCreator(String connectionString, List<String> topicSelectors) {
 		Out.t("SessionCreator constructor...");
 
-		this.connectionString = connectionString;
+		this.connectionString = connectionString.split("[,]");
 		Out.i("Creating sessions listening to topic selectors: '%s'", StringUtils.join(topicSelectors, ", "));
 		for (String topicSelector : topicSelectors) {
 			this.topicSelectors.add(Diffusion.topicSelectors().parse(topicSelector));
 		}
 
-		this.sessionFactory = Diffusion.sessions().inputBufferSize(Integer.getInteger("bench.input.buffer.size", DEFAULT_MAXIMUM_MESSAGE_SIZE))
-				.outputBufferSize(Integer.getInteger("bench.output.buffer.size", DEFAULT_MAXIMUM_MESSAGE_SIZE)).connectionTimeout(60 * 1000).reconnectionTimeout(120 * 1000)
+		if(Integer.getInteger("bench.input.buffer.size", 0) >0) {
+			this.sessionFactory = Diffusion.sessions()
+				.inputBufferSize(Integer.getInteger("bench.input.buffer.size"));
+		}
+		if(Integer.getInteger("bench.output.buffer.size", 0) >0) {
+			this.sessionFactory = Diffusion.sessions()
+				.outputBufferSize(Integer.getInteger("bench.output.buffer.size"));
+		}
+
+		this.sessionFactory = Diffusion.sessions()
+				.connectionTimeout(60 * 1000)
+				.reconnectionTimeout(120 * 1000)
+				.recoveryBufferSize(8000)
 				.reconnectionStrategy(new ReconnectionStrategy() {
 
 					@Override
@@ -162,6 +179,19 @@ public class SessionCreator {
 		Out.t("Done SessionCreator#start");
 	}
 
+	public void start(final Set<InetSocketAddress> multiIpClientAddresses, int sessionCreateRatePerSec, long sessionDurationMs) {
+		Out.t("SessionCreator#start");
+		switch (state) {
+		case INITIALISED:
+			doStart(multiIpClientAddresses, sessionCreateRatePerSec, sessionDurationMs);
+			state = CreatorState.STARTED;
+			break;
+		default:
+			break;
+		}
+		Out.t("Done SessionCreator#start");
+	}
+
 	private void doStart(final Set<InetSocketAddress> multiIpClientAddresses, int maxNumberSessions) {
 		final Set<InetSocketAddress> myClientAddresses = new HashSet<>();
 		if (multiIpClientAddresses == null || multiIpClientAddresses.isEmpty()) {
@@ -171,10 +201,14 @@ public class SessionCreator {
 		}
 		Out.t("SessionCreator#doStart for '%d' sessions and '%d' clientAddress", maxNumberSessions, myClientAddresses.size());
 		long delay = 0L;
+		CountDownLatch sessionsLatch = new CountDownLatch(maxNumberSessions);
+		final List<CountDownLatch> subscribeCdlList = new ArrayList();
 		do {
 			for (InetSocketAddress tmpAddress : myClientAddresses) {
 				final InetSocketAddress myAddress = tmpAddress;
 				addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
+
+					ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
 					@Override
 					public void run() {
@@ -183,7 +217,171 @@ public class SessionCreator {
 						try {
 
 							/* ASYNC session creation */
-							sessionFactory.localSocketAddress(myAddress).open(connectionString, new SessionFactory.OpenCallback() {
+							sessionFactory.localSocketAddress(myAddress).open(getConnectionString(), new SessionFactory.OpenCallback() {
+
+								@Override
+								public void onError(ErrorReason errorReason) {
+									Out.e("Connection failed: '%s'", errorReason);
+									connectionFailures.incrementAndGet();
+									sessionsLatch.countDown();
+								}
+
+								@Override
+								public void onOpened(Session session) {
+
+									CountDownLatch cdl = new CountDownLatch(topicSelectors.size());
+									for (TopicSelector sel : topicSelectors) {
+										Topics topicFeature = session.feature(Topics.class);
+										topicFeature.addTopicStream(sel, new Topics.TopicStream() {
+
+											@Override
+											public void onError(ErrorReason reason) {
+												if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
+													Out.e("TopicStream::OnError '%s'", reason);
+												}
+											}
+
+											@Override
+											public void onClose() {
+											}
+
+											@Override
+											public void onUnsubscription(String topic, UnsubscribeReason arg1) {
+											}
+
+											@Override
+											public void onTopicUpdate(String topic, Content content, UpdateContext context) {
+												Out.d("onTopicUpdate for topic '%s'", topic);
+												messageCount.incrementAndGet();
+												messageByteCount.addAndGet(content.length());
+											}
+
+											@Override
+											public void onSubscription(String topic, TopicDetails details) {
+												Out.d("Subscribed to topic '%s'", topic);
+											}
+										});
+
+										topicFeature.subscribe(sel, new CompletionCallback() {
+
+											@Override
+											public void onDiscard() {
+												Out.t("SessionCreator#topics.onDiscard");
+												cdl.countDown();
+											}
+
+											@Override
+											public void onComplete() {
+												Out.t("SessionCreator#topics.onComplete");
+												cdl.countDown();
+
+											}
+										});
+									}
+
+									synchronized (sessionSetLock) {
+										sessions.add(session);
+									}
+									Out.t("Session open complete");
+									sessionsLatch.countDown();
+									subscribeCdlList.add(cdl);
+								}
+							});
+
+							Out.t("Done submitting session open");
+						} catch (Throwable t) {
+							/* ASYNC session creation */
+							// synchronized (sessionListLock) {
+							// connectionFailures++;
+							// }
+							connectionFailures.incrementAndGet();
+							sessionsLatch.countDown();
+							Out.e("Exception caught trying to connect: '%s'", t.getMessage());
+							if (Out.doLog(Out.OutLevel.DEBUG)) {
+								t.printStackTrace();
+							}
+
+						}
+					}
+
+					private String getConnectionString() {
+						if(connectionString.length == 1) {
+							return connectionString[0];
+						}
+						return connectionString[rnd.nextInt(connectionString.length)];
+					}
+				}, ++delay % 500, TimeUnit.MILLISECONDS));
+			}
+		} while (--maxNumberSessions > 0);
+
+		int remainingWait = 900;
+		try {
+			// ensure all sessions submitted
+			sessionsLatch.await(remainingWait, TimeUnit.SECONDS);
+			// now can countdown the subscriptions
+			for(CountDownLatch cdl : subscribeCdlList) {
+				long start = System.currentTimeMillis();
+				cdl.await(remainingWait, TimeUnit.SECONDS);
+				long elapsed = (System.currentTimeMillis() - start)/1000;
+				if(remainingWait > elapsed) {
+					remainingWait -= elapsed;
+				} else {
+					remainingWait = 0;
+				}
+			}
+		} catch (InterruptedException e) {
+			Out.e("Exception caught waiting for sessions to open: '%s'", e.getMessage());
+			if (Out.doLog(Out.OutLevel.DEBUG)) {
+				e.printStackTrace();
+			}
+		}
+		// all connected/failed but not processed all the subscriptions yet.
+		writeSteadyStateFlagFile();
+
+		Out.t("Done SessionCreator#doStart");
+	}
+
+	/**
+	 * Session churn
+	 *
+	 * @param multiIpClientAddresses
+	 * @param sessionCreateRatePerSec
+	 * @param sessionDurationMs
+	 */
+	private void doStart(Set<InetSocketAddress> multiIpClientAddresses,
+			long sessionCreateRatePerSec, long sessionDurationSec) {
+
+		final Set<InetSocketAddress> myClientAddresses = new HashSet<>();
+		if (multiIpClientAddresses == null || multiIpClientAddresses.isEmpty()) {
+			myClientAddresses.add(new InetSocketAddress(0));
+		} else {
+			myClientAddresses.addAll(multiIpClientAddresses);
+		}
+		Out.t("SessionCreator#doStart for '%d' sessions/second and '%d' sessionDurationMs", sessionCreateRatePerSec, sessionDurationSec);
+
+		long interval = 1000/sessionCreateRatePerSec;
+		long now = System.currentTimeMillis();
+		boolean writtenSteadyStateFlagFile = false;
+
+		do {
+			for (InetSocketAddress tmpAddress : myClientAddresses) {
+				final InetSocketAddress myAddress = tmpAddress;
+				try {
+					startedSessions.incrementAndGet();
+				Benchmarker.connectThreadPool.submit(new Runnable() {
+
+					ThreadLocalRandom rnd = ThreadLocalRandom.current();
+
+					@Override
+					public void run() {
+
+						Out.t("Adding session");
+						try {
+
+							/* ASYNC session creation */
+							sessionFactory.localSocketAddress(myAddress).open(getConnectionString(), new SessionFactory.OpenCallback() {
+
+								AtomicInteger selectorsCount = new AtomicInteger(topicSelectors.size());
 
 								@Override
 								public void onError(ErrorReason errorReason) {
@@ -193,9 +391,6 @@ public class SessionCreator {
 
 								@Override
 								public void onOpened(Session session) {
-									synchronized (sessionSetLock) {
-										sessions.add(session);
-									}
 
 									for (TopicSelector sel : topicSelectors) {
 										Topics topicFeature = session.feature(Topics.class);
@@ -218,7 +413,7 @@ public class SessionCreator {
 
 											@Override
 											public void onTopicUpdate(String topic, Content content, UpdateContext context) {
-												Out.d("Update for topic '%s'", topic);
+												Out.d("onTopicUpdate for topic '%s'", topic);
 												messageCount.incrementAndGet();
 												messageByteCount.addAndGet(content.length());
 											}
@@ -239,18 +434,27 @@ public class SessionCreator {
 											@Override
 											public void onComplete() {
 												Out.t("SessionCreator#topics.onComplete");
+												if(selectorsCount.decrementAndGet() == 0) {
+													setupDisconnectPhase(session, sessionDurationSec);
+												}
 											}
 										});
 									}
+
+									synchronized (sessionSetLock) {
+										sessions.add(session);
+									}
+									Out.t("Session open complete");
 								}
 							});
 
-							Out.t("Done Adding session");
+							Out.t("Done submitting session open");
 						} catch (Throwable t) {
 							/* ASYNC session creation */
 							// synchronized (sessionListLock) {
 							// connectionFailures++;
 							// }
+							connectionFailures.incrementAndGet();
 							Out.e("Exception caught trying to connect: '%s'", t.getMessage());
 							if (Out.doLog(Out.OutLevel.DEBUG)) {
 								t.printStackTrace();
@@ -258,12 +462,66 @@ public class SessionCreator {
 
 						}
 					}
-				}, ++delay % 500, TimeUnit.MILLISECONDS));
-			}
-		} while (--maxNumberSessions > 0);
 
-		Out.t("Done SessionCreator#doStart");
+					private String getConnectionString() {
+						if(connectionString.length == 1) {
+							return connectionString[0];
+						}
+						return connectionString[rnd.nextInt(connectionString.length)];
+					}
+				});
+				} catch(Exception e) {
+					Out.e("Exception caught when submitting session open ",e.getMessage());
+					connectionFailures.incrementAndGet();
+				}
+			}
+
+			if( connectedSessions.get() >= sessionCreateRatePerSec * sessionDurationSec &&
+					! writtenSteadyStateFlagFile) {
+				writeSteadyStateFlagFile();
+				writtenSteadyStateFlagFile = true;
+			}
+
+			now = now + interval;
+			LockSupport.parkUntil(now);
+		} while (true);
 	}
+
+	private static volatile ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
+
+	protected void setupDisconnectPhase(Session session, long sessionDuration) {
+	if(sessionDuration > 0) {
+		closeExecutor.schedule(new SessionCloseTask(session), sessionDuration, TimeUnit.SECONDS);
+	}
+	}
+
+	class SessionCloseTask implements Runnable {
+
+	private Session session;
+
+	public SessionCloseTask(Session session) {
+		this.session = session;
+	}
+
+	@Override
+	public void run() {
+		this.session.close();
+		endedSessions.incrementAndGet();
+	}
+	}
+
+    private void writeSteadyStateFlagFile() {
+        File file = new File("steady_state");
+        try {
+        	file.createNewFile();
+        	Out.i("Wrote steady state file");
+        	} catch (IOException e) {
+        		Out.e("Exception caught in writeSteadyStateFlagFile: '%s'", e.getMessage());
+        		if (Out.doLog(Out.OutLevel.DEBUG)) {
+        			e.printStackTrace();
+        			}
+        		}
+    }
 
 	public void stop() {
 		Out.t("SessionCreator#stop");

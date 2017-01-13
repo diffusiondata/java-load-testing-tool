@@ -45,7 +45,6 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
 
 public class ControlClientCreator {
 
-	private static final String CC_BASE_TOPIC = Benchmarker.ROOT_TOPIC + "/ControlClients";
 	private SessionFactory sessionFactory;
 	private String connectionString;
 	List<String> updateTopics = new ArrayList<>();
@@ -300,7 +299,7 @@ public class ControlClientCreator {
 			builder.append(c);
 		}
 
-		return CC_BASE_TOPIC + builder.toString();
+		return builder.toString();
 	}
 
 	byte[] createSizedByteArray(int messageSizeInBytes) {

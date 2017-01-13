@@ -89,6 +89,9 @@ public class Out {
 		System.out.println("     -sessions [connectionString] [maxSessions] => enables creation of [maxSessions]");
 		System.out.println("          Sessions (UnifiedAPI) for the given full connection string");
 		System.out.println("          (e.g. 'dpt://10.10.10.10:8080' or 'ws://10.10.10.10:8080')");
+		System.out.println("     -sessionsRate [connectionString] [sessionRate] [sessionDuration] => enables creation of sessions at rate of [sessionRate] per second each lasting [sessionDuration] seconds");
+		System.out.println("          Sessions (UnifiedAPI) for the given full connection string");
+		System.out.println("          (e.g. 'dpt://10.10.10.10:8080' or 'ws://10.10.10.10:8080')");
 		System.out.println("     -controlClients [connectionString] [maxControlClients] <username> <password> =>");
 		System.out.println("          enables creation of [maxControlClients] ControlClients (UnifiedAPI) for");
 		System.out.println("          the given full connection string (e.g. 'dpt://10.10.10.10:8080')");
@@ -100,6 +103,7 @@ public class Out {
 		System.out.println("          and as many as desired can be provided)");
 		System.out.println("     -myTopics [topic] <topics...> => subscribes to user defined topics, REQUIRES the");
 		System.out.println("          full topic path of EACH topic (can provide as many as you would like)");
+//		System.out.println("     -topicType [type] => specify the topic type");
 		System.out.println("");
 		exit(exitCode);
 	}
