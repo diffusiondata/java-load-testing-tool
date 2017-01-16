@@ -22,6 +22,7 @@ import com.pushtechnology.diffusion.api.APIException;
 import com.pushtechnology.diffusion.api.config.ConfigManager;
 import com.pushtechnology.diffusion.api.config.ThreadPoolConfig;
 import com.pushtechnology.diffusion.api.config.ThreadsConfig;
+import com.pushtechnology.diffusion.client.topics.details.TopicType;
 
 public class Benchmarker {
 
@@ -60,7 +61,7 @@ public class Benchmarker {
 	private static List<String> myTopics = new ArrayList<>();
 	private static List<String> topics = new ArrayList<>();
 	// TODO
-	private static String topicType;
+	private static TopicType topicType = TopicType.SINGLE_VALUE;
 
 	private static Set<InetSocketAddress> multiIpClientAddresses = new HashSet<>();
 
@@ -91,7 +92,7 @@ public class Benchmarker {
 
 		if (doPublish) {
 			Out.i("Creating Publisher with connection string: '%s'", publisherConnectionString);
-			publisher = new Publisher(publisherConnectionString, publisherUsername, publisherPassword, topics);
+			publisher = new Publisher(publisherConnectionString, publisherUsername, publisherPassword, topics, topicType);
 			publisher.start();
 
 			publisherMonitor = globalThreadPool.scheduleAtFixedRate(new Runnable() {
@@ -117,7 +118,7 @@ public class Benchmarker {
 
 		if (doCreateSessions) {
 			Out.i("Creating %d Sessions with connection string: '%s'", maxNumSessions, sessionConnectionString);
-			sessionCreator = new SessionCreator(sessionConnectionString, myTopics);
+			sessionCreator = new SessionCreator(sessionConnectionString, myTopics, topicType);
 
 			sessionsCounter = globalThreadPool.scheduleAtFixedRate(new Runnable() {
 
@@ -316,6 +317,14 @@ public class Benchmarker {
 				Out.d("Using user topics: '%s'", StringUtils.join(myTopics, " || "));
 				if (myTopics.size() == 0) {
 					Out.usage(1, "'-myTopics' requires at least 1 parameter, please check the usage and try again!");
+				}
+				break;
+			case "-topicType":
+				if (hasNext(args, i, 1)) {
+					topicType = TopicType.valueOf(args[++i]);
+					Out.d("Topic type %s", topicType);
+				} else {
+					Out.usage(1, errStr, "-topicType needs 1 string argument");
 				}
 				break;
 			default:

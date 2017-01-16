@@ -24,7 +24,9 @@ import com.pushtechnology.diffusion.client.callbacks.ErrorReason;
 import com.pushtechnology.diffusion.client.content.Content;
 import com.pushtechnology.diffusion.client.features.Topics;
 import com.pushtechnology.diffusion.client.features.Topics.CompletionCallback;
+import com.pushtechnology.diffusion.client.features.Topics.TopicStream;
 import com.pushtechnology.diffusion.client.features.Topics.UnsubscribeReason;
+import com.pushtechnology.diffusion.client.features.Topics.ValueStream;
 import com.pushtechnology.diffusion.client.session.Session;
 import com.pushtechnology.diffusion.client.session.Session.ErrorHandler;
 import com.pushtechnology.diffusion.client.session.Session.Listener;
@@ -34,7 +36,11 @@ import com.pushtechnology.diffusion.client.session.SessionFactory;
 import com.pushtechnology.diffusion.client.session.reconnect.ReconnectionStrategy;
 import com.pushtechnology.diffusion.client.topics.TopicSelector;
 import com.pushtechnology.diffusion.client.topics.details.TopicDetails;
+import com.pushtechnology.diffusion.client.topics.details.TopicSpecification;
+import com.pushtechnology.diffusion.client.topics.details.TopicType;
 import com.pushtechnology.diffusion.client.types.UpdateContext;
+import com.pushtechnology.diffusion.datatype.Bytes;
+import com.pushtechnology.diffusion.datatype.json.JSON;
 
 public class SessionCreator {
 
@@ -62,11 +68,13 @@ public class SessionCreator {
 	private final int maximumTimeoutDurationMs = 1000 * 60 * 10;
 
 	public CreatorState state;
+	private final TopicType topicType;
 
-	public SessionCreator(String connectionString, List<String> topicSelectors) {
+	public SessionCreator(String connectionString, List<String> topicSelectors, TopicType topicType) {
 		Out.t("SessionCreator constructor...");
 
 		this.connectionString = connectionString.split("[,]");
+		this.topicType = topicType;
 		Out.i("Creating sessions listening to topic selectors: '%s'", StringUtils.join(topicSelectors, ", "));
 		for (String topicSelector : topicSelectors) {
 			this.topicSelectors.add(Diffusion.topicSelectors().parse(topicSelector));
@@ -230,54 +238,23 @@ public class SessionCreator {
 								public void onOpened(Session session) {
 
 									CountDownLatch cdl = new CountDownLatch(topicSelectors.size());
-									for (TopicSelector sel : topicSelectors) {
-										Topics topicFeature = session.feature(Topics.class);
-										topicFeature.addTopicStream(sel, new Topics.TopicStream() {
+									subscribe(topicSelectors,
+											session,
+											new CompletionCallback() {
 
-											@Override
-											public void onError(ErrorReason reason) {
-												if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
-													Out.e("TopicStream::OnError '%s'", reason);
+												@Override
+												public void onDiscard() {
+													Out.t("SessionCreator#topics.onDiscard");
+													cdl.countDown();
 												}
-											}
 
-											@Override
-											public void onClose() {
-											}
+												@Override
+												public void onComplete() {
+													Out.t("SessionCreator#topics.onComplete");
+													cdl.countDown();
 
-											@Override
-											public void onUnsubscription(String topic, UnsubscribeReason arg1) {
-											}
-
-											@Override
-											public void onTopicUpdate(String topic, Content content, UpdateContext context) {
-												Out.d("onTopicUpdate for topic '%s'", topic);
-												messageCount.incrementAndGet();
-												messageByteCount.addAndGet(content.length());
-											}
-
-											@Override
-											public void onSubscription(String topic, TopicDetails details) {
-												Out.d("Subscribed to topic '%s'", topic);
-											}
-										});
-
-										topicFeature.subscribe(sel, new CompletionCallback() {
-
-											@Override
-											public void onDiscard() {
-												Out.t("SessionCreator#topics.onDiscard");
-												cdl.countDown();
-											}
-
-											@Override
-											public void onComplete() {
-												Out.t("SessionCreator#topics.onComplete");
-												cdl.countDown();
-
-											}
-										});
-									}
+												}
+											});
 
 									synchronized (sessionSetLock) {
 										sessions.add(session);
@@ -392,54 +369,23 @@ public class SessionCreator {
 								@Override
 								public void onOpened(Session session) {
 
-									for (TopicSelector sel : topicSelectors) {
-										Topics topicFeature = session.feature(Topics.class);
-										topicFeature.addTopicStream(sel, new Topics.TopicStream() {
+									subscribe(topicSelectors,
+											session,
+											new CompletionCallback() {
 
-											@Override
-											public void onError(ErrorReason reason) {
-												if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
-													Out.e("TopicStream::OnError '%s'", reason);
-												}
+										@Override
+										public void onDiscard() {
+											Out.t("SessionCreator#topics.onDiscard");
+										}
+
+										@Override
+										public void onComplete() {
+											Out.t("SessionCreator#topics.onComplete");
+											if(selectorsCount.decrementAndGet() <= 0) {
+												setupDisconnectPhase(session, sessionDurationSec);
 											}
-
-											@Override
-											public void onClose() {
-											}
-
-											@Override
-											public void onUnsubscription(String topic, UnsubscribeReason arg1) {
-											}
-
-											@Override
-											public void onTopicUpdate(String topic, Content content, UpdateContext context) {
-												Out.d("onTopicUpdate for topic '%s'", topic);
-												messageCount.incrementAndGet();
-												messageByteCount.addAndGet(content.length());
-											}
-
-											@Override
-											public void onSubscription(String topic, TopicDetails details) {
-												Out.d("Subscribed to topic '%s'", topic);
-											}
-										});
-
-										topicFeature.subscribe(sel, new CompletionCallback() {
-
-											@Override
-											public void onDiscard() {
-												Out.t("SessionCreator#topics.onDiscard");
-											}
-
-											@Override
-											public void onComplete() {
-												Out.t("SessionCreator#topics.onComplete");
-												if(selectorsCount.decrementAndGet() == 0) {
-													setupDisconnectPhase(session, sessionDurationSec);
-												}
-											}
-										});
-									}
+										}
+									});
 
 									synchronized (sessionSetLock) {
 										sessions.add(session);
@@ -487,6 +433,119 @@ public class SessionCreator {
 		} while (true);
 	}
 
+	private void subscribe(List<TopicSelector> topicSelectors, Session session, CompletionCallback completionCallback) {
+		
+		for (TopicSelector sel : topicSelectors) {
+			Topics topicFeature = session.feature(Topics.class);
+			if(topicType == TopicType.SINGLE_VALUE) {
+				topicFeature.addTopicStream(sel, new SingleValueTopicStream());
+			} else if(topicType == TopicType.BINARY) {
+				topicFeature.addStream(sel, Bytes.class, new BytesValueStream());
+			} else if(topicType == TopicType.JSON) {
+				topicFeature.addStream(sel, JSON.class, new JsonStream());
+			}
+
+			topicFeature.subscribe(sel, completionCallback);
+		}
+	}
+
+	private class SingleValueTopicStream implements Topics.TopicStream {
+
+		@Override
+		public void onError(ErrorReason reason) {
+			if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
+				Out.e("TopicStream::OnError '%s'", reason);
+			}
+		}
+
+		@Override
+		public void onClose() {
+		}
+
+		@Override
+		public void onUnsubscription(String topic, UnsubscribeReason arg1) {
+		}
+
+		@Override
+		public void onTopicUpdate(String topic, Content content, UpdateContext context) {
+			updateCounters(topic, content.length());
+		}
+
+		@Override
+		public void onSubscription(String topic, TopicDetails details) {
+			Out.d("Subscribed to topic '%s'", topic);
+		}
+	}
+
+    /**
+     * The value stream.
+     */
+    private final class JsonStream implements Topics.ValueStream<JSON> {
+
+		@Override
+		public void onSubscription(String arg0, TopicSpecification arg1) {
+			// TODO Auto-generated method stub
+			
+		}
+
+		@Override
+		public void onUnsubscription(String arg0, TopicSpecification arg1,
+				UnsubscribeReason arg2) {
+		}
+
+		@Override
+		public void onClose() {
+		}
+
+		@Override
+		public void onError(ErrorReason arg0) {
+		}
+
+		@Override
+		public void onValue(String topic, TopicSpecification arg1, JSON oldValue,
+				JSON newValue) {
+			updateCounters(topic, newValue.length());
+		}
+    	
+    }
+    
+    /**
+     * The value stream.
+     */
+    private final class BytesValueStream implements Topics.ValueStream<Bytes> {
+
+    	
+		@Override
+		public void onValue(String topicPath, TopicSpecification specification,
+				Bytes oldValue, Bytes newValue) {
+
+            	updateCounters(topicPath, newValue.toByteArray().length);
+		}
+
+		@Override
+		public void onSubscription(String arg0, TopicSpecification arg1) {
+		}
+
+		@Override
+		public void onUnsubscription(String arg0, TopicSpecification arg1,
+				UnsubscribeReason arg2) {
+		}
+
+		@Override
+		public void onClose() {
+		}
+
+		@Override
+		public void onError(ErrorReason arg0) {
+		}
+    }
+
+	private void updateCounters(String topic, int length) {
+		Out.d("onTopicUpdate for topic '%s'", topic);
+		messageCount.incrementAndGet();
+		messageByteCount.addAndGet(length);
+	}
+    
 	private static volatile ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
 
 	protected void setupDisconnectPhase(Session session, long sessionDuration) {
@@ -507,6 +566,9 @@ public class SessionCreator {
 	public void run() {
 		this.session.close();
 		endedSessions.incrementAndGet();
+		synchronized (sessionSetLock) {
+			sessions.remove(session);
+		}
 	}
 	}
 

@@ -103,7 +103,7 @@ public class Out {
 		System.out.println("          and as many as desired can be provided)");
 		System.out.println("     -myTopics [topic] <topics...> => subscribes to user defined topics, REQUIRES the");
 		System.out.println("          full topic path of EACH topic (can provide as many as you would like)");
-//		System.out.println("     -topicType [type] => specify the topic type");
+		System.out.println("     -topicType [type] => specify the topic type");
 		System.out.println("");
 		exit(exitCode);
 	}

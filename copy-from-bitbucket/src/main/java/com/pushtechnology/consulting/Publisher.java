@@ -1,9 +1,11 @@
 package com.pushtechnology.consulting;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -38,6 +40,10 @@ import com.pushtechnology.diffusion.client.session.SessionFactory;
 import com.pushtechnology.diffusion.client.topics.details.TopicDetails;
 import com.pushtechnology.diffusion.client.topics.details.TopicType;
 import com.pushtechnology.diffusion.client.types.UpdateContext;
+import com.pushtechnology.diffusion.datatype.binary.Binary;
+import com.pushtechnology.diffusion.datatype.binary.BinaryDataType;
+import com.pushtechnology.diffusion.datatype.json.JSON;
+import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
 public class Publisher {
 
@@ -56,12 +62,15 @@ public class Publisher {
 
 	private CreatorState state;
 	private String rootTopic;
+	private final TopicType topicType;
+	private RandomString randomString;
 
-	public Publisher(String connectionString, String username, String password, final List<String> topics) {
+	public Publisher(String connectionString, String username, String password, final List<String> topics, TopicType topicType) {
 		Out.t("Publisher constructor");
 
 		this.connectionString = connectionString;
 		this.rootTopic  = topics.get(0).split("/")[0];
+		this.topicType = topicType;
 
 		this.sessionFactory = Diffusion.sessions().connectionTimeout(10000);
 		if (!username.isEmpty()) {
@@ -133,7 +142,7 @@ public class Publisher {
 				Out.t("Publisher#missingTopicHandler.OnMissingTopic");
 				String topicPath = notification.getTopicPath();
 				Out.i("OnMissingTopic called for '%s'", topicPath);
-				createTopic(topicPath, TopicType.SINGLE_VALUE);
+				createTopic(topicPath, topicType);
 				notification.proceed();
 				Out.t("Done Publisher#missingTopicHandler.OnMissingTopic");
 
@@ -169,7 +178,7 @@ public class Publisher {
 				onStandby = false;
 				Publisher.this.updater = updater;
 				Out.d("Creating root topic '%s'", rootTopic);
-				createTopic(rootTopic, TopicType.SINGLE_VALUE);
+				createTopic(rootTopic, topicType);
 				for (String topic : topicStandbyList) {
 					startFeed(topic);
 				}
@@ -289,6 +298,7 @@ public class Publisher {
 		if (paths.length == 4) {
 			Out.d("Found topicPath '%s' elements: '%s', '%s', '%s'", topicPath, paths[0]+"/"+paths[1], paths[2], paths[3]);
 			final int messageSizeInBytes = NumberUtils.toInt(paths[2], -1);
+			randomString = new RandomString(messageSizeInBytes);
 			final int messagesPerSecond = NumberUtils.toInt(paths[3], -1);
 			if (messageSizeInBytes > 0 && messagesPerSecond > 0 && messagesPerSecond<=1000) {
 				Out.d("Using messageSizeInBytes: '%d' and messagesPerSecond: '%d'", messageSizeInBytes, messagesPerSecond);
@@ -310,19 +320,21 @@ public class Publisher {
 					@Override
 					public void run() {
 						Out.d("updater.update() for topic path: '%s' %s", topicPath, messageSizeInBytes);
-						Publisher.this.updater.update(topicPath, Diffusion.content().newContent(createSizedByteArray(messageSizeInBytes)),
-								new UpdateCallback() {
+						update(topicPath, new UpdateCallback() {
 
-									@Override
-									public void onError(ErrorReason error) {
-										Out.e("Error : '%s'", error);
-									}
+							@Override
+							public void onError(ErrorReason error) {
+								Out.e("Error : '%s'", error);
+							}
 
-									@Override
-									public void onSuccess() {
-										Out.d("Topic updated");
-									}
-								});
+							@Override
+							public void onSuccess() {
+								Out.d("Topic updated");
+							}
+							},
+								false, messageSizeInBytes);
+						//Publisher.this.updater.update(topicPath, Diffusion.content().newContent(createSizedByteArray(messageSizeInBytes)),
+						//		);
 					}
 				}, 0L, scheduleIntervalInMillis, TimeUnit.MILLISECONDS);
 				Out.d("Started updater for '%s'", topicPath);
@@ -337,6 +349,33 @@ public class Publisher {
 		Out.t("Done Publisher#startFeed for '%s'", topicPath);
 	}
 
+	private void update(final String selector, UpdateCallback cb, boolean hasInitialContent, int messageSizeInBytes){
+		try {
+			if(topicType == TopicType.BINARY) {
+				final byte[] bytes = ByteBuffer.allocate(messageSizeInBytes).putLong(System.nanoTime()).array();
+				final BinaryDataType binaryDataType = Diffusion.dataTypes().binary();
+				final Binary b = binaryDataType.readValue(bytes);
+				Publisher.this.updater
+					.valueUpdater(Binary.class)
+					.update(selector, b, cb);
+			} else if(topicType == TopicType.JSON){
+				final String jsonString = "{ \"Time\" : \""+System.nanoTime()+"\", \"Data\" : \""+randomString.nextString()+"\"}";
+				final JSONDataType jsonDataType =  Diffusion.dataTypes().json();
+				final JSON json = jsonDataType.fromJsonString(jsonString);
+				Publisher.this.updater
+					.valueUpdater(JSON.class)
+					.update(selector, json, cb);
+			} else {
+				Publisher.this.updater
+					.update(selector, Diffusion.content().newContent(createSizedByteArray(messageSizeInBytes)), cb);
+			}
+		
+		} catch (Exception e){
+			e.printStackTrace();
+			Out.e("Error in publisher loop "+e.getMessage(),e);
+		}
+	}
+	
 	byte[] createSizedByteArray(int messageSizeInBytes) {
 		byte[] bytes = new byte[messageSizeInBytes];
 		ThreadLocalRandom.current().nextBytes(bytes);
@@ -385,4 +424,32 @@ public class Publisher {
 		Out.t("Done Publisher#shutdown");
 	}
 
+	class RandomString {
+
+		  private char[] symbols;
+
+		  private final Random random = new Random();
+
+		  private final char[] buf;
+
+		  public RandomString(int length) {
+
+			    StringBuilder tmp = new StringBuilder();
+			    for (char ch = '0'; ch <= '9'; ++ch)
+			      tmp.append(ch);
+			    for (char ch = 'a'; ch <= 'z'; ++ch)
+			      tmp.append(ch);
+			    symbols = tmp.toString().toCharArray();
+			    
+		    if (length < 1)
+		      throw new IllegalArgumentException("length < 1: " + length);
+		    buf = new char[length];
+		  }
+
+		  public String nextString() {
+		    for (int idx = 0; idx < buf.length; ++idx) 
+		      buf[idx] = symbols[random.nextInt(symbols.length)];
+		    return new String(buf);
+		  }
+		}
 }
