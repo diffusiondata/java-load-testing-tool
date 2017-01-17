@@ -117,23 +117,40 @@ public class Benchmarker {
 		}
 
 		if (doCreateSessions) {
-			Out.i("Creating %d Sessions with connection string: '%s'", maxNumSessions, sessionConnectionString);
+			
+			if (maxNumSessions > 0) {
+				Out.i("Creating %d Sessions with connection string: '%s'", maxNumSessions, sessionConnectionString);
+			} else {
+				Out.i("Creating Sessions with connection string: '%s'", sessionConnectionString);
+				Out.i("Creating Sessions at %d/second, disconnecting after %d seconds", sessionRate, sessionDuration);								
+			}
 			sessionCreator = new SessionCreator(sessionConnectionString, myTopics, topicType);
-
+			
+			Out.i("Sessions: [Connected] [Started] [Recovering] [Closed] [Ended] [Failed]  | Messages: [Number] [Bytes]");
 			sessionsCounter = globalThreadPool.scheduleAtFixedRate(new Runnable() {
 
 				@Override
 				public void run() {
 					Out.t("sessionsCounter fired");
-					Out.i("====== Session Status ======");
-					Out.i("       %d connected", sessionCreator.connectedSessions.get());
-					Out.i("       %d message since", sessionCreator.messageCount.getAndSet(0));
-					Out.i("       %d message bytes since", sessionCreator.messageByteCount.getAndSet(0));
-					Out.i("       %d reconnecting", sessionCreator.recoveringSessions.get());
-					Out.i("       %d closed", sessionCreator.closedSessions.get());
-					Out.i("       %d started", sessionCreator.startedSessions.get());
-					Out.i("       %d ended", sessionCreator.endedSessions.get());
-					Out.i("       %d failed to start", sessionCreator.connectionFailures.get());
+					//Out.i("====== Session Status ======");
+					//Out.i("       %d connected", sessionCreator.connectedSessions.get());
+					//Out.i("       %d message since", sessionCreator.messageCount.getAndSet(0));
+					//Out.i("       %d message bytes since", sessionCreator.messageByteCount.getAndSet(0));
+					//Out.i("       %d reconnecting", sessionCreator.recoveringSessions.get());
+					//Out.i("       %d closed", sessionCreator.closedSessions.get());
+					//Out.i("       %d started", sessionCreator.startedSessions.get());
+					//Out.i("       %d ended", sessionCreator.endedSessions.get());
+					//Out.i("       %d failed to start", sessionCreator.connectionFailures.get());
+					Out.i("Sessions: %d %d %d %d %d %d  | Messages: %d %d",
+                                                        sessionCreator.connectedSessions.get(),
+                                                        sessionCreator.startedSessions.get(),
+                                                        sessionCreator.recoveringSessions.get(),
+                                                        sessionCreator.closedSessions.get(),
+                                                        sessionCreator.endedSessions.get(),
+                                                        sessionCreator.connectionFailures.get(),
+
+                                                        sessionCreator.messageCount.getAndSet(0),
+                                                        sessionCreator.messageByteCount.getAndSet(0));
 					Out.t("Done sessionsCounter fired");
 				}
 			}, 0L, 5L, TimeUnit.SECONDS);

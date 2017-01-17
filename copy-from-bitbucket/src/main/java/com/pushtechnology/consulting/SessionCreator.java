@@ -576,7 +576,7 @@ public class SessionCreator {
         File file = new File("steady_state");
         try {
         	file.createNewFile();
-        	Out.i("Wrote steady state file");
+        	Out.i("Reached steady state (Wrote steady state file)");
         	} catch (IOException e) {
         		Out.e("Exception caught in writeSteadyStateFlagFile: '%s'", e.getMessage());
         		if (Out.doLog(Out.OutLevel.DEBUG)) {
