@@ -89,9 +89,11 @@ public class Out {
 		System.out.println("     -sessions [connectionString] [maxSessions] => enables creation of [maxSessions]");
 		System.out.println("          Sessions (UnifiedAPI) for the given full connection string");
 		System.out.println("          (e.g. 'dpt://10.10.10.10:8080' or 'ws://10.10.10.10:8080')");
-		System.out.println("     -sessionsRate [connectionString] [sessionRate] [sessionDuration] => enables creation of sessions at rate of [sessionRate] per second each lasting [sessionDuration] seconds");
+		System.out.println("     -sessionsRate [connectionString] [sessionRate] [sessionDuration] <connectPoolSize> ");
+		System.out.println("          => enables creation of sessions at rate of [sessionRate] per second each lasting [sessionDuration] seconds");
 		System.out.println("          Sessions (UnifiedAPI) for the given full connection string");
-		System.out.println("          (e.g. 'dpt://10.10.10.10:8080' or 'ws://10.10.10.10:8080')");
+		System.out.println("          (e.g. 'ws://10.10.10.10:8080' or 'wss://10.10.10.10:8080')");
+		System.out.println("          The connectPoolSize cannot exceed 5 * number of cpus. If more connect concurrency is needed then add more cpus.");
 		System.out.println("     -controlClients [connectionString] [maxControlClients] <username> <password> =>");
 		System.out.println("          enables creation of [maxControlClients] ControlClients (UnifiedAPI) for");
 		System.out.println("          the given full connection string (e.g. 'dpt://10.10.10.10:8080')");

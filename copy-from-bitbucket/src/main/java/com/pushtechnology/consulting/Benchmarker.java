@@ -31,7 +31,7 @@ public class Benchmarker {
 	}
 
 	public static ScheduledExecutorService globalThreadPool = Executors.newScheduledThreadPool(10);
-	public static ScheduledExecutorService connectThreadPool = Executors.newScheduledThreadPool(10);
+	public static ScheduledExecutorService connectThreadPool;
 	
 	// params
 	private static boolean doPublish;
@@ -64,6 +64,7 @@ public class Benchmarker {
 	private static TopicType topicType = TopicType.SINGLE_VALUE;
 
 	private static Set<InetSocketAddress> multiIpClientAddresses = new HashSet<>();
+	private static int connectThreadPoolSize = 10;
 
 	// static finals
 	private static final int CLIENT_INBOUND_QUEUE_QUEUE_SIZE = 5000000;
@@ -89,6 +90,8 @@ public class Benchmarker {
 			Out.e("Failed to set client inbound pool size to '%d'", CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
 			ex.printStackTrace();
 		}
+
+		connectThreadPool = Executors.newScheduledThreadPool(connectThreadPoolSize );
 
 		if (doPublish) {
 			Out.i("Creating Publisher with connection string: '%s'", publisherConnectionString);
@@ -285,6 +288,12 @@ public class Benchmarker {
 					sessionConnectionString = args[++i];
 					sessionRate = Integer.parseInt(args[++i]);
 					sessionDuration = Integer.parseInt(args[++i]);
+					if (hasNext(args, i, 1)) {
+						connectThreadPoolSize = Integer.parseInt(args[++i]);
+						if(connectThreadPoolSize > Runtime.getRuntime().availableProcessors() * 5) {
+							Out.usage(1, errStr, "-sessionsRate", 3);
+						}
+					}
 					maxNumSessions = 0;
 					Out.d("Creating Sessions at rate %s duration %s with connection string: '%s'", sessionRate, sessionDuration, sessionConnectionString);
 				} else {
