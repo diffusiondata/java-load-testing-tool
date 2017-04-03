@@ -1,11 +1,13 @@
 package com.pushtechnology.consulting;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 
-import org.joda.time.DateTime;
-import org.joda.time.format.DateTimeFormat;
-import org.joda.time.format.DateTimeFormatter;
+//import org.joda.time.DateTime;
+//import org.joda.time.format.DateTimeFormat;
+//import org.joda.time.format.DateTimeFormatter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,7 +57,7 @@ public class Out {
 	private static Logger defaultLog;
 	private static Map<String, Logger> logMap = new HashMap<>();
 
-	private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSSS");
+	private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSSS");
 
 	public static void setLogLevel(OutLevel level) {
 		defaultLevel = level;
@@ -117,7 +119,7 @@ public class Out {
 
 	/**
 	 * Manages all formatted logging output
-	 * 
+	 *
 	 * @param level
 	 *            - {@link OutLevel} the log statement comes from
 	 * @param str
@@ -171,12 +173,12 @@ public class Out {
 
 	/**
 	 * {@link OutLevel#ERROR} or SLF4J <code>error</code> level logging
-	 * 
+	 *
 	 * @param str
 	 *            - log string to format
 	 * @param args
 	 *            -varArg params for formatting
-	 * 
+	 *
 	 * @see #log(OutLevel, String, Object...)
 	 */
 	public static void e(String str, Object... args) {
@@ -185,12 +187,12 @@ public class Out {
 
 	/**
 	 * {@link OutLevel#WARN} or SLF4J <code>warn</code> level logging
-	 * 
+	 *
 	 * @param str
 	 *            - log string to format
 	 * @param args
 	 *            -varArg params for formatting
-	 * 
+	 *
 	 * @see #log(OutLevel, String, Object...)
 	 */
 	public static void w(String str, Object... args) {
@@ -199,12 +201,12 @@ public class Out {
 
 	/**
 	 * {@link OutLevel#INFO} or SLF4J <code>info</code> level logging
-	 * 
+	 *
 	 * @param str
 	 *            - log string to format
 	 * @param args
 	 *            -varArg params for formatting
-	 * 
+	 *
 	 * @see #log(OutLevel, String, Object...)
 	 */
 	public static void i(String str, Object... args) {
@@ -213,12 +215,12 @@ public class Out {
 
 	/**
 	 * {@link OutLevel#DEBUG} or SLF4J <code>debug</code> level logging
-	 * 
+	 *
 	 * @param str
 	 *            - log string to format
 	 * @param args
 	 *            -varArg params for formatting
-	 * 
+	 *
 	 * @see #log(OutLevel, String, Object...)
 	 */
 	public static void d(String str, Object... args) {
@@ -227,12 +229,12 @@ public class Out {
 
 	/**
 	 * {@link OutLevel#TRACE} or SLF4J <code>trace</code> level logging
-	 * 
+	 *
 	 * @param str
 	 *            - log string to format
 	 * @param args
 	 *            -varArg params for formatting
-	 * 
+	 *
 	 * @see #log(OutLevel, String, Object...)
 	 */
 	public static void t(String str, Object... args) {
@@ -241,13 +243,13 @@ public class Out {
 
 	/**
 	 * Used to create a date/time string for logging
-	 * 
+	 *
 	 * @return formatted datetime
-	 * 
+	 *
 	 * @see #DATETIME_FORMATTER
 	 */
 	static String timeStr() {
-		return DATETIME_FORMATTER.print(DateTime.now()) + " ::: ";
+		return LocalDate.now().format(DATETIME_FORMATTER) + " ::: ";
 	}
 
 }
