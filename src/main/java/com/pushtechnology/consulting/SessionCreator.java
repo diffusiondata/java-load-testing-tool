@@ -1,5 +1,17 @@
 package com.pushtechnology.consulting;
 
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.INITIALISED;
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.SHUTDOWN;
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.STARTED;
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.STOPPED;
+import static com.pushtechnology.diffusion.client.session.Session.State.CONNECTING;
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.BINARY;
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.JSON;
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.SINGLE_VALUE;
+import static java.lang.Integer.getInteger;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -12,7 +24,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
@@ -24,7 +35,6 @@ import com.pushtechnology.diffusion.client.callbacks.ErrorReason;
 import com.pushtechnology.diffusion.client.content.Content;
 import com.pushtechnology.diffusion.client.features.Topics;
 import com.pushtechnology.diffusion.client.features.Topics.CompletionCallback;
-import com.pushtechnology.diffusion.client.features.Topics.UnsubscribeReason;
 import com.pushtechnology.diffusion.client.session.Session;
 import com.pushtechnology.diffusion.client.session.Session.ErrorHandler;
 import com.pushtechnology.diffusion.client.session.Session.Listener;
@@ -40,32 +50,30 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
 import com.pushtechnology.diffusion.datatype.Bytes;
 import com.pushtechnology.diffusion.datatype.json.JSON;
 
-public class SessionCreator {
+/*package*/ class SessionCreator {
 
     private SessionFactory sessionFactory;
-    private String connectionString[];
-    List<TopicSelector> topicSelectors = new ArrayList<>();
-
+    private final String connectionString[];
+    private List<TopicSelector> topicSelectors = new ArrayList<>();
     private List<ScheduledFuture<?>> addSessions = new ArrayList<>();
-
     private final Object sessionSetLock = new Object();
+    private final Set<Session> sessions = new HashSet<>();
 
-    public final Set<Session> sessions = new HashSet<>();
-    public final AtomicInteger connectedSessions = new AtomicInteger(0);
-    public final AtomicInteger recoveringSessions = new AtomicInteger();
-    public final AtomicInteger closedSessions = new AtomicInteger(0);
-    public final AtomicInteger endedSessions = new AtomicInteger(0);
-    public final AtomicInteger startedSessions = new AtomicInteger(0);
-    public final AtomicInteger connectionFailures = new AtomicInteger(0);
-    public final AtomicInteger messageCount = new AtomicInteger(0);
-    public final AtomicInteger messageByteCount = new AtomicInteger(0);
+    private final AtomicInteger connectedSessions = new AtomicInteger(0);
+    private final AtomicInteger recoveringSessions = new AtomicInteger();
+    private final AtomicInteger closedSessions = new AtomicInteger(0);
+    private final AtomicInteger endedSessions = new AtomicInteger(0);
+    private final AtomicInteger startedSessions = new AtomicInteger(0);
+    private final AtomicInteger connectionFailures = new AtomicInteger(0);
+    private final AtomicInteger messageCount = new AtomicInteger(0);
+    private final AtomicInteger messageByteCount = new AtomicInteger(0);
 
     // http://developer.reappt.io/docs/manual/html/developerguide/client/concepts/uci_reconnect.html
     private final int maxReconnectionIntervalSec = 10;
     // Set the maximum amount of time we'll try and reconnect for to 10 minutes.
     private final int maximumTimeoutDurationMs = 1000 * 60 * 10;
 
-    public CreatorState state;
+    private CreatorState state;
     private final TopicType topicType;
 
     public SessionCreator(String connectionString,List<String> topicSelectors,
@@ -83,12 +91,11 @@ public class SessionCreator {
 
         if (Integer.getInteger("bench.input.buffer.size", 0) > 0) {
             this.sessionFactory = Diffusion.sessions()
-                .inputBufferSize(Integer.getInteger("bench.input.buffer.size"));
+                .inputBufferSize(getInteger("bench.input.buffer.size"));
         }
         if (Integer.getInteger("bench.output.buffer.size", 0) > 0) {
             this.sessionFactory = Diffusion.sessions()
-                .outputBufferSize(
-                    Integer.getInteger("bench.output.buffer.size"));
+                .outputBufferSize(getInteger("bench.output.buffer.size"));
         }
 
         this.sessionFactory = Diffusion.sessions()
@@ -106,8 +113,7 @@ public class SessionCreator {
                         public void run() {
                             reconnection.start();
                         }
-                    }, getRandomReconnect(maxReconnectionIntervalSec),
-                        TimeUnit.SECONDS);
+                    }, getRandomReconnect(maxReconnectionIntervalSec), SECONDS);
                 }
             })
             .reconnectionTimeout(maximumTimeoutDurationMs)
@@ -144,7 +150,7 @@ public class SessionCreator {
                         recoveringSessions.decrementAndGet();
                     }
 
-                    if (oldState == State.CONNECTING) {
+                    if (oldState == CONNECTING) {
                         // No not increment closed sessions when the client
                         // failed to connect
                         return;
@@ -154,12 +160,9 @@ public class SessionCreator {
                         closedSessions.incrementAndGet();
 
                         synchronized (sessionSetLock) {
-                            // Assumes sessions are only closed when shutting
-                            // down
-                            // The state listener is called during the close
-                            // call
-                            // Do not modify the sessions object when iterating
-                            // over it
+                            // Assumes sessions are only closed when shutting down
+                            // The state listener is called during the close call
+                            // Do not modify the sessions object when iterating over it
                             if (newState != State.CLOSED_BY_CLIENT) {
                                 sessions.remove(session);
                             }
@@ -171,7 +174,7 @@ public class SessionCreator {
                 }
             });
 
-        state = CreatorState.INITIALISED;
+        state = INITIALISED;
 
         Out.t("Done SessionCreator constructor...");
     }
@@ -187,13 +190,12 @@ public class SessionCreator {
         return ThreadLocalRandom.current().nextInt(1, max + 1);
     }
 
-    public void start(final Set<InetSocketAddress> multiIpClientAddresses,
-        int maxNumberSessions) {
+    public void start(final Set<InetSocketAddress> multiIpClientAddresses, int maxNumberSessions) {
         Out.t("SessionCreator#start");
         switch (state) {
         case INITIALISED:
             doStart(multiIpClientAddresses, maxNumberSessions);
-            state = CreatorState.STARTED;
+            state = STARTED;
             break;
         default:
             break;
@@ -201,14 +203,12 @@ public class SessionCreator {
         Out.t("Done SessionCreator#start");
     }
 
-    public void start(final Set<InetSocketAddress> multiIpClientAddresses,
-        int sessionCreateRatePerSec,long sessionDurationMs) {
+    public void start(final Set<InetSocketAddress> multiIpClientAddresses, int sessionCreateRatePerSec,long sessionDurationMs) {
         Out.t("SessionCreator#start");
         switch (state) {
         case INITIALISED:
-            doStart(multiIpClientAddresses, sessionCreateRatePerSec,
-                sessionDurationMs);
-            state = CreatorState.STARTED;
+            doStart(multiIpClientAddresses, sessionCreateRatePerSec, sessionDurationMs);
+            state = STARTED;
             break;
         default:
             break;
@@ -216,28 +216,26 @@ public class SessionCreator {
         Out.t("Done SessionCreator#start");
     }
 
-    private void doStart(final Set<InetSocketAddress> multiIpClientAddresses,
-        int maxNumberSessions) {
+    private void doStart(final Set<InetSocketAddress> multiIpClientAddresses, int maxNumberSessions) {
         final Set<InetSocketAddress> myClientAddresses = new HashSet<>();
-        if (multiIpClientAddresses == null ||
-            multiIpClientAddresses.isEmpty()) {
+        if (multiIpClientAddresses == null || multiIpClientAddresses.isEmpty()) {
             myClientAddresses.add(new InetSocketAddress(0));
         }
         else {
             myClientAddresses.addAll(multiIpClientAddresses);
         }
-        Out.t("SessionCreator#doStart for '%d' sessions and '%d' clientAddress",
-            maxNumberSessions, myClientAddresses.size());
+        Out.t("SessionCreator#doStart for '%d' sessions and '%d' clientAddress", maxNumberSessions, myClientAddresses.size());
         long delay = 0L;
-        CountDownLatch sessionsLatch = new CountDownLatch(maxNumberSessions);
-        final List<CountDownLatch> subscribeCdlList = new ArrayList();
+        final CountDownLatch sessionsLatch = new CountDownLatch(maxNumberSessions);
+        final List<CountDownLatch> subscribeCdlList = new ArrayList<>();
+
+        //FIXME: staircase
         do {
             for (InetSocketAddress tmpAddress : myClientAddresses) {
                 final InetSocketAddress myAddress = tmpAddress;
-                addSessions
-                    .add(Benchmarker.globalThreadPool.schedule(new Runnable() {
+                addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
 
-                        ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                        final ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
                         @Override
                         public void run() {
@@ -246,46 +244,33 @@ public class SessionCreator {
                             try {
 
                                 /* ASYNC session creation */
-                                sessionFactory.localSocketAddress(myAddress)
-                                    .open(getConnectionString(),
+                                sessionFactory.localSocketAddress(myAddress).open(getConnectionString(),
                                         new SessionFactory.OpenCallback() {
 
                                             @Override
-                                            public void onError(
-                                                ErrorReason errorReason) {
-                                                Out.e("Connection failed: '%s'",
-                                                    errorReason);
-                                                connectionFailures
-                                                    .incrementAndGet();
+                                            public void onError(ErrorReason errorReason) {
+                                                Out.e("Connection failed: '%s'", errorReason);
+                                                connectionFailures.incrementAndGet();
                                                 sessionsLatch.countDown();
                                             }
 
                                             @Override
-                                            public void
-                                                onOpened(Session session) {
-
-                                                CountDownLatch cdl =
-                                                    new CountDownLatch(
-                                                        topicSelectors.size());
-                                                subscribe(topicSelectors,
-                                                    session,
-                                                    new CompletionCallback() {
+                                            public void onOpened(Session session) {
+                                                final CountDownLatch cdl = new CountDownLatch(topicSelectors.size());
+                                                subscribe(topicSelectors, session, new CompletionCallback() {
 
                                                         @Override
                                                         public void
                                                             onDiscard() {
-                                                            Out.t(
-                                                                "SessionCreator#topics.onDiscard");
+                                                            Out.t("SessionCreator#topics.onDiscard");
                                                             cdl.countDown();
                                                         }
 
                                                         @Override
                                                         public void
                                                             onComplete() {
-                                                            Out.t(
-                                                                "SessionCreator#topics.onComplete");
+                                                            Out.t("SessionCreator#topics.onComplete");
                                                             cdl.countDown();
-
                                                         }
                                                     });
 
@@ -302,18 +287,12 @@ public class SessionCreator {
                             }
                             catch (Throwable t) {
                                 /* ASYNC session creation */
-                                // synchronized (sessionListLock) {
-                                // connectionFailures++;
-                                // }
                                 connectionFailures.incrementAndGet();
                                 sessionsLatch.countDown();
-                                Out.e(
-                                    "Exception caught trying to connect: '%s'",
-                                    t.getMessage());
+                                Out.e("Exception caught trying to connect: '%s'", t.getMessage());
                                 if (Out.doLog(Out.OutLevel.DEBUG)) {
                                     t.printStackTrace();
                                 }
-
                             }
                         }
 
@@ -321,10 +300,9 @@ public class SessionCreator {
                             if (connectionString.length == 1) {
                                 return connectionString[0];
                             }
-                            return connectionString[rnd
-                                .nextInt(connectionString.length)];
+                            return connectionString[rnd.nextInt(connectionString.length)];
                         }
-                    }, ++delay % 500, TimeUnit.MILLISECONDS));
+                    }, ++delay % 500, MILLISECONDS));
             }
         }
         while (--maxNumberSessions > 0);
@@ -332,11 +310,11 @@ public class SessionCreator {
         int remainingWait = 900;
         try {
             // ensure all sessions submitted
-            sessionsLatch.await(remainingWait, TimeUnit.SECONDS);
+            sessionsLatch.await(remainingWait, SECONDS);
             // now can countdown the subscriptions
             for (CountDownLatch cdl : subscribeCdlList) {
                 long start = System.currentTimeMillis();
-                cdl.await(remainingWait, TimeUnit.SECONDS);
+                cdl.await(remainingWait, SECONDS);
                 long elapsed = (System.currentTimeMillis() - start) / 1000;
                 if (remainingWait > elapsed) {
                     remainingWait -= elapsed;
@@ -370,18 +348,15 @@ public class SessionCreator {
         long sessionCreateRatePerSec,long sessionDurationSec) {
 
         final Set<InetSocketAddress> myClientAddresses = new HashSet<>();
-        if (multiIpClientAddresses == null ||
-            multiIpClientAddresses.isEmpty()) {
+        if (multiIpClientAddresses == null || multiIpClientAddresses.isEmpty()) {
             myClientAddresses.add(new InetSocketAddress(0));
         }
         else {
             myClientAddresses.addAll(multiIpClientAddresses);
         }
-        Out.t(
-            "SessionCreator#doStart for '%d' sessions/second and '%d' sessionDurationMs",
-            sessionCreateRatePerSec, sessionDurationSec);
+        Out.t("SessionCreator#doStart for '%d' sessions/second and '%d' sessionDurationMs", sessionCreateRatePerSec, sessionDurationSec);
 
-        long interval = 1000 / sessionCreateRatePerSec;
+        final long interval = 1000 / sessionCreateRatePerSec;
         long now = System.currentTimeMillis();
         boolean writtenSteadyStateFlagFile = false;
 
@@ -392,6 +367,7 @@ public class SessionCreator {
                     startedSessions.incrementAndGet();
                     Benchmarker.connectThreadPool.submit(new Runnable() {
 
+                        //FIXME: this godawful staircase should be replaced
                         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
                         @Override
@@ -401,48 +377,33 @@ public class SessionCreator {
                             try {
 
                                 /* ASYNC session creation */
-                                sessionFactory.localSocketAddress(myAddress)
-                                    .open(getConnectionString(),
-                                        new SessionFactory.OpenCallback() {
+                                sessionFactory.localSocketAddress(myAddress).open(getConnectionString(), new SessionFactory.OpenCallback() {
 
-                                            AtomicInteger selectorsCount =
-                                                new AtomicInteger(
-                                                    topicSelectors.size());
+                                            final AtomicInteger selectorsCount = new AtomicInteger(topicSelectors.size());
 
                                             @Override
-                                            public void onError(
-                                                ErrorReason errorReason) {
-                                                Out.e("Connection failed: '%s'",
-                                                    errorReason);
-                                                connectionFailures
-                                                    .incrementAndGet();
+                                            public void onError( ErrorReason errorReason) {
+                                                Out.e("Connection failed: '%s'", errorReason);
+                                                connectionFailures.incrementAndGet();
                                             }
 
                                             @Override
                                             public void
                                                 onOpened(Session session) {
 
-                                                subscribe(topicSelectors,
-                                                    session,
-                                                    new CompletionCallback() {
+                                                subscribe(topicSelectors, session, new CompletionCallback() {
 
                                                         @Override
-                                                        public void
-                                                            onDiscard() {
-                                                            Out.t(
-                                                                "SessionCreator#topics.onDiscard");
+                                                        public void onDiscard() {
+                                                            Out.t("SessionCreator#topics.onDiscard");
                                                         }
 
                                                         @Override
                                                         public void
                                                             onComplete() {
-                                                            Out.t(
-                                                                "SessionCreator#topics.onComplete");
-                                                            if (selectorsCount
-                                                                .decrementAndGet() <= 0) {
-                                                                setupDisconnectPhase(
-                                                                    session,
-                                                                    sessionDurationSec);
+                                                            Out.t("SessionCreator#topics.onComplete");
+                                                            if (selectorsCount.decrementAndGet() <= 0) {
+                                                                setupDisconnectPhase(session,sessionDurationSec);
                                                             }
                                                         }
                                                     });
@@ -458,13 +419,8 @@ public class SessionCreator {
                             }
                             catch (Throwable t) {
                                 /* ASYNC session creation */
-                                // synchronized (sessionListLock) {
-                                // connectionFailures++;
-                                // }
                                 connectionFailures.incrementAndGet();
-                                Out.e(
-                                    "Exception caught trying to connect: '%s'",
-                                    t.getMessage());
+                                Out.e("Exception caught trying to connect: '%s'", t.getMessage());
                                 if (Out.doLog(Out.OutLevel.DEBUG)) {
                                     t.printStackTrace();
                                 }
@@ -482,15 +438,12 @@ public class SessionCreator {
                     });
                 }
                 catch (Exception e) {
-                    Out.e("Exception caught when submitting session open ",
-                        e.getMessage());
+                    Out.e("Exception caught when submitting session open ", e.getMessage());
                     connectionFailures.incrementAndGet();
                 }
             }
 
-            if (connectedSessions.get() >= sessionCreateRatePerSec *
-                sessionDurationSec &&
-                !writtenSteadyStateFlagFile) {
+            if (connectedSessions.get() >= sessionCreateRatePerSec * sessionDurationSec && !writtenSteadyStateFlagFile) {
                 writeSteadyStateFlagFile();
                 writtenSteadyStateFlagFile = true;
             }
@@ -501,19 +454,17 @@ public class SessionCreator {
         while (true);
     }
 
-    private void subscribe(List<TopicSelector> topicSelectors,Session session,
-        CompletionCallback completionCallback) {
+    private void subscribe(List<TopicSelector> topicSelectors, Session session, CompletionCallback completionCallback) {
 
         for (TopicSelector sel : topicSelectors) {
-            Topics topicFeature = session.feature(Topics.class);
-            if (topicType == TopicType.SINGLE_VALUE) {
+            final Topics topicFeature = session.feature(Topics.class);
+            if (topicType == SINGLE_VALUE) {
                 topicFeature.addTopicStream(sel, new SingleValueTopicStream());
             }
-            else if (topicType == TopicType.BINARY) {
-                topicFeature.addStream(sel, Bytes.class,
-                    new BytesValueStream());
+            else if (topicType == BINARY) {
+                topicFeature.addStream(sel, Bytes.class, new BytesValueStream());
             }
-            else if (topicType == TopicType.JSON) {
+            else if (topicType == JSON) {
                 topicFeature.addStream(sel, JSON.class, new JsonStream());
             }
 
@@ -521,7 +472,7 @@ public class SessionCreator {
         }
     }
 
-    private class SingleValueTopicStream implements Topics.TopicStream {
+    private class SingleValueTopicStream extends Topics.TopicStream.Default {
 
         @Override
         public void onError(ErrorReason reason) {
@@ -531,16 +482,7 @@ public class SessionCreator {
         }
 
         @Override
-        public void onClose() {
-        }
-
-        @Override
-        public void onUnsubscription(String topic,UnsubscribeReason arg1) {
-        }
-
-        @Override
-        public void onTopicUpdate(String topic,Content content,
-            UpdateContext context) {
+        public void onTopicUpdate(String topic,Content content, UpdateContext context) {
             updateCounters(topic, content.length());
         }
 
@@ -553,30 +495,10 @@ public class SessionCreator {
     /**
      * The value stream.
      */
-    private final class JsonStream implements Topics.ValueStream<JSON> {
+    private final class JsonStream extends Topics.ValueStream.Default<JSON> {
 
         @Override
-        public void onSubscription(String arg0,TopicSpecification arg1) {
-            // TODO Auto-generated method stub
-
-        }
-
-        @Override
-        public void onUnsubscription(String arg0,TopicSpecification arg1,
-            UnsubscribeReason arg2) {
-        }
-
-        @Override
-        public void onClose() {
-        }
-
-        @Override
-        public void onError(ErrorReason arg0) {
-        }
-
-        @Override
-        public void onValue(String topic,TopicSpecification arg1,JSON oldValue,
-            JSON newValue) {
+        public void onValue(String topic,TopicSpecification arg1,JSON oldValue, JSON newValue) {
             updateCounters(topic, newValue.length());
         }
 
@@ -585,31 +507,13 @@ public class SessionCreator {
     /**
      * The value stream.
      */
-    private final class BytesValueStream implements Topics.ValueStream<Bytes> {
+    private final class BytesValueStream extends Topics.ValueStream.Default<Bytes> {
 
         @Override
-        public void onValue(String topicPath,TopicSpecification specification,
-            Bytes oldValue,Bytes newValue) {
-
+        public void onValue(String topicPath,TopicSpecification specification, Bytes oldValue,Bytes newValue) {
             updateCounters(topicPath, newValue.toByteArray().length);
         }
 
-        @Override
-        public void onSubscription(String arg0,TopicSpecification arg1) {
-        }
-
-        @Override
-        public void onUnsubscription(String arg0,TopicSpecification arg1,
-            UnsubscribeReason arg2) {
-        }
-
-        @Override
-        public void onClose() {
-        }
-
-        @Override
-        public void onError(ErrorReason arg0) {
-        }
     }
 
     private void updateCounters(String topic,int length) {
@@ -623,38 +527,18 @@ public class SessionCreator {
 
     protected void setupDisconnectPhase(Session session,long sessionDuration) {
         if (sessionDuration > 0) {
-            closeExecutor.schedule(new SessionCloseTask(session),
-                sessionDuration, TimeUnit.SECONDS);
-        }
-    }
-
-    class SessionCloseTask implements Runnable {
-
-        private Session session;
-
-        public SessionCloseTask(Session session) {
-            this.session = session;
-        }
-
-        @Override
-        public void run() {
-            this.session.close();
-            endedSessions.incrementAndGet();
-            synchronized (sessionSetLock) {
-                sessions.remove(session);
-            }
+            closeExecutor.schedule(new SessionCloseTask(session), sessionDuration, SECONDS);
         }
     }
 
     private void writeSteadyStateFlagFile() {
-        File file = new File("steady_state");
+        final File file = new File("steady_state");
         try {
             file.createNewFile();
             Out.i("Reached steady state (Wrote steady state file)");
         }
         catch (IOException e) {
-            Out.e("Exception caught in writeSteadyStateFlagFile: '%s'",
-                e.getMessage());
+            Out.e("Exception caught in writeSteadyStateFlagFile: '%s'", e.getMessage());
             if (Out.doLog(Out.OutLevel.DEBUG)) {
                 e.printStackTrace();
             }
@@ -670,7 +554,7 @@ public class SessionCreator {
                     tmpFuture.cancel(false);
                 }
             }
-            state = CreatorState.STOPPED;
+            state = STOPPED;
             break;
         default:
             break;
@@ -695,11 +579,86 @@ public class SessionCreator {
                     e.printStackTrace();
                 }
             }
-            state = CreatorState.SHUTDOWN;
+            state = SHUTDOWN;
             break;
         default:
             break;
         }
         Out.t("Done SessionCreator#shutdown");
+    }
+
+    /**
+     * Returns connectedSessions.
+     *
+     * @return the connectedSessions
+     */
+    AtomicInteger getConnectedSessions() {
+        return connectedSessions;
+    }
+
+    /**
+     * @return the startedSessions
+     */
+    AtomicInteger getStartedSessions() {
+        return startedSessions;
+    }
+
+    /**
+     * @return the recoveringSessions
+     */
+    AtomicInteger getRecoveringSessions() {
+        return recoveringSessions;
+    }
+
+    /**
+     * @return the closedSessions
+     */
+    AtomicInteger getClosedSessions() {
+        return closedSessions;
+    }
+
+    /**
+     * @return the endedSessions
+     */
+    AtomicInteger getEndedSessions() {
+        return endedSessions;
+    }
+
+    /**
+     * @return the connectionFailures
+     */
+    AtomicInteger getConnectionFailures() {
+        return connectionFailures;
+    }
+
+    /**
+     * @return the messageCount
+     */
+    AtomicInteger getMessageCount() {
+        return messageCount;
+    }
+
+    /**
+     * @return the messageByteCount
+     */
+    AtomicInteger getMessageByteCount() {
+        return messageByteCount;
+    }
+
+    class SessionCloseTask implements Runnable {
+        private Session session;
+
+        public SessionCloseTask(Session session) {
+            this.session = session;
+        }
+
+        @Override
+        public void run() {
+            this.session.close();
+            endedSessions.incrementAndGet();
+            synchronized (sessionSetLock) {
+                sessions.remove(session);
+            }
+        }
     }
 }

@@ -1,5 +1,17 @@
 package com.pushtechnology.consulting;
 
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.INITIALISED;
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.SHUTDOWN;
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.STARTED;
+import static com.pushtechnology.consulting.Benchmarker.CreatorState.STOPPED;
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.SINGLE_VALUE;
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.STATELESS;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.apache.commons.lang3.StringUtils.EMPTY;
+import static org.apache.commons.lang3.StringUtils.join;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -10,7 +22,6 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 import org.apache.commons.lang3.StringUtils;
@@ -24,7 +35,6 @@ import com.pushtechnology.diffusion.client.content.Content;
 import com.pushtechnology.diffusion.client.features.Topics;
 import com.pushtechnology.diffusion.client.features.Topics.CompletionCallback;
 import com.pushtechnology.diffusion.client.features.Topics.TopicStream;
-import com.pushtechnology.diffusion.client.features.Topics.UnsubscribeReason;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicAddFailReason;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicControl;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicControl.AddCallback;
@@ -40,30 +50,26 @@ import com.pushtechnology.diffusion.client.session.Session.State;
 import com.pushtechnology.diffusion.client.session.SessionFactory;
 import com.pushtechnology.diffusion.client.session.SessionId;
 import com.pushtechnology.diffusion.client.topics.details.TopicDetails;
-import com.pushtechnology.diffusion.client.topics.details.TopicType;
 import com.pushtechnology.diffusion.client.types.UpdateContext;
 
-public class ControlClientCreator {
+/*package*/ class ControlClientCreator {
 
     private SessionFactory sessionFactory;
-    private String connectionString;
-    List<String> updateTopics = new ArrayList<>();
+    private final String connectionString;
+    private final List<String> updateTopics = new ArrayList<>();
 
     private ScheduledFuture<?> addControlClients;
     private boolean doAddControlClientsTest;
-    public Map<String,ScheduledFuture<?>> topicUpdatersByTopicPath =
-        new HashMap<>();
-
+    private final Map<String, ScheduledFuture<?>> topicUpdatersByTopicPath = new HashMap<>();
     private final Object controlClientListLock = new Object();
 
-    public volatile List<Session> controlClients = new ArrayList<>();
-    public volatile List<Session> connectingControlClients = new ArrayList<>();
-    public volatile List<Session> closedByServerControlClients =
-        new ArrayList<>();
-    public volatile List<Session> closedControlClients = new ArrayList<>();
-    public volatile int connectionFailures = 0;
+    private volatile List<Session> controlClients = new ArrayList<>();
+    private volatile List<Session> connectingControlClients = new ArrayList<>();
+    private volatile List<Session> closedByServerControlClients = new ArrayList<>();
+    private volatile List<Session> closedControlClients = new ArrayList<>();
+    private volatile int connectionFailures = 0;
 
-    public CreatorState state;
+    private CreatorState state;
 
     private UpdateCallback updateCallback = new UpdateCallback() {
 
@@ -77,36 +83,6 @@ public class ControlClientCreator {
             Out.d("Topic updated");
         }
     };
-
-    abstract class CCUpdateSource implements UpdateSource {
-
-        @Override
-        public void onRegistered(String topicPath,Registration registration) {
-            Out.d("Registered UpdateSource on topicPath '%s'", topicPath);
-        }
-
-        @Override
-        public void onClose(String topicPath) {
-            Out.d("Closed UpdateSource on topicPath '%s'", topicPath);
-        }
-
-        @Override
-        public void onError(String topicPath,ErrorReason errorReason) {
-            if (ErrorReason.SESSION_CLOSED.equals(errorReason)) {
-                // ignore => saves a bunch of output for now.
-            }
-            else {
-                Out.e("Error on UpdateSource for topicPath '%s' :: '%s'",
-                    topicPath, errorReason);
-            }
-        }
-
-        @Override
-        public void onStandby(String topicPath) {
-            Out.d("UpdateSource on standby for topicPath '%s'", topicPath);
-        }
-    }
-
     private AddCallback addCallback = new AddCallback() {
 
         @Override
@@ -125,13 +101,12 @@ public class ControlClientCreator {
         }
     };
 
-    public ControlClientCreator(final String connectionString,String username,
-        String password,List<String> topics) {
+    ControlClientCreator(final String connectionString, String username, String password, List<String> topics) {
+
         Out.t("ControlClientCreator constructor...");
 
         this.connectionString = connectionString;
-        Out.i("Creating controlClients publishing to topics: '%s'",
-            StringUtils.join(topics, ", "));
+        Out.i("Creating controlClients publishing to topics: '%s'", join(topics, ", "));
         this.updateTopics.addAll(topics);
 
         this.sessionFactory = Diffusion.sessions().connectionTimeout(60000);
@@ -141,241 +116,151 @@ public class ControlClientCreator {
                 this.sessionFactory = this.sessionFactory.password(password);
             }
         }
-        this.sessionFactory =
-            this.sessionFactory.errorHandler(new ErrorHandler() {
+        this.sessionFactory = this.sessionFactory.errorHandler(new ErrorHandler() {
 
-                @Override
-                public void onError(Session session,SessionError err) {
-                    Out.e("ControlClientCreator#sessionFactory.onError : '%s'",
-                        err.getMessage());
-                }
-            }).listener(new Listener() {
+            @Override
+            public void onError(Session session, SessionError err) {
+                Out.e("ControlClientCreator#sessionFactory.onError : '%s'", err.getMessage());
+            }
+        }).listener(new Listener() {
 
-                @Override
-                public void onSessionStateChanged(final Session session,
-                    State oldState,State newState) {
-                    Out.t(
-                        "ControlClientCreator#sessionFactory.onSessionStateChanged");
-                    Out.t("ControlClient state changed from '%s' to '%s'",
-                        oldState, newState);
-                    switch (newState) {
-                    case CONNECTED_ACTIVE:
-                        final String baseControlClientTopic =
-                            getFullTopicPathForSessionId(
-                                session.getSessionId());
-                        final TopicControl topicControlFeature =
-                            session.feature(TopicControl.class);
-                        topicControlFeature.addTopic(baseControlClientTopic,
-                            TopicType.STATELESS, addCallback);
+            @Override
+            public void onSessionStateChanged(final Session session,
+                State oldState, State newState) {
+                Out.t("ControlClientCreator#sessionFactory.onSessionStateChanged");
+                Out.t("ControlClient state changed from '%s' to '%s'", oldState, newState);
+                switch (newState) {
+                case CONNECTED_ACTIVE:
+                    final String baseControlClientTopic = getFullTopicPathForSessionId(session.getSessionId());
+                    final TopicControl topicControlFeature = session.feature(TopicControl.class);
+                    topicControlFeature.addTopic(baseControlClientTopic, STATELESS, addCallback);
+                    session.feature(TopicUpdateControl.class).registerUpdateSource(baseControlClientTopic, new CCUpdateSource() {
 
-                        session.feature(TopicUpdateControl.class)
-                            .registerUpdateSource(baseControlClientTopic,
-                                new CCUpdateSource() {
+                        @Override
+                        public void onActive(String topicPath, final Updater updater) {
+                            Out.d("UpdateSource active for topicPath '%s'", topicPath);
+                            for (String top : updateTopics) {
+                                topicControlFeature.addTopic(baseControlClientTopic + "/" + top, SINGLE_VALUE, new AddCallback.Default() {
 
-                                    @Override
-                                    public void onActive(String topicPath,
-                                        final Updater updater) {
-                                        Out.d(
-                                            "UpdateSource active for topicPath '%s'",
-                                            topicPath);
-                                        for (String top : updateTopics) {
-                                            topicControlFeature.addTopic(
-                                                baseControlClientTopic + "/" +
-                                                    top,
-                                                TopicType.SINGLE_VALUE,
-                                                new AddCallback() {
+                                        @Override
+                                        public void onTopicAdded(final String topicPath) {
+                                            Out.d("Added topic '%s', starting feed...", topicPath);
+                                            final Topics topics = session.feature(Topics.class);
+                                            topics.addTopicStream(">" + topicPath,
+                                                new TopicStream.Default() {
 
                                                     @Override
-                                                    public void onDiscard() {
+                                                    public void onSubscription(String topic, TopicDetails details) {
+                                                        Out.d("Subscribed to topic '%s'", topic);
                                                     }
 
                                                     @Override
-                                                    public void onTopicAdded(
-                                                        final String topicPath) {
-                                                        Out.d(
-                                                            "Added topic '%s', starting feed...",
-                                                            topicPath);
-                                                        Topics topics =
-                                                            session.feature(
-                                                                Topics.class);
-                                                        topics.addTopicStream(
-                                                            ">" + topicPath,
-                                                            new TopicStream() {
-
-                                                                @Override
-                                                                public void
-                                                                    onClose() {
-                                                                }
-
-                                                                @Override
-                                                                public void
-                                                                    onUnsubscription(
-                                                                        String topic,
-                                                                        UnsubscribeReason reason) {
-                                                                }
-
-                                                                @Override
-                                                                public void
-                                                                    onSubscription(
-                                                                        String topic,
-                                                                        TopicDetails details) {
-                                                                    Out.d(
-                                                                        "Subscribed to topic '%s'",
-                                                                        topic);
-                                                                }
-
-                                                                @Override
-                                                                public void
-                                                                    onError(
-                                                                        ErrorReason reason) {
-                                                                    if (!ErrorReason.SESSION_CLOSED
-                                                                        .equals(
-                                                                            reason)) {
-                                                                        Out.e(
-                                                                            "TopicStream::OnError '%s'",
-                                                                            reason);
-                                                                    }
-                                                                }
-
-                                                                @Override
-                                                                public void
-                                                                    onTopicUpdate(
-                                                                        String topicPath,
-                                                                        Content content,
-                                                                        UpdateContext context) {
-                                                                    Out.d(
-                                                                        "Update for topic '%s'",
-                                                                        topicPath);
-                                                                }
-                                                            });
-                                                        topics.subscribe(
-                                                            ">" + topicPath,
-                                                            new CompletionCallback() {
-
-                                                                @Override
-                                                                public void
-                                                                    onDiscard() {
-                                                                    Out.t(
-                                                                        "ControlClient#topics.onDiscard");
-                                                                }
-
-                                                                @Override
-                                                                public void
-                                                                    onComplete() {
-                                                                    Out.t(
-                                                                        "ControlClient#topics.onComplete to topicSelector '%s'",
-                                                                        topicPath);
-                                                                }
-                                                            });
-                                                        startFeed(topicPath,
-                                                            updater);
-                                                    }
-
-                                                    @Override
-                                                    public void
-                                                        onTopicAddFailed(
-                                                            String topicPath,
-                                                            TopicAddFailReason reason) {
-                                                        switch (reason) {
-                                                        case EXISTS:
-                                                        case EXISTS_MISMATCH:
-                                                            startFeed(topicPath,
-                                                                updater);
-                                                            break;
-                                                        default:
-                                                            Out.e(
-                                                                "Failed to add topic: '%s' because '%s'",
-                                                                topicPath,
-                                                                reason);
-                                                            break;
+                                                    public void onError(ErrorReason reason) {
+                                                        if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
+                                                            Out.e("TopicStream::OnError '%s'", reason);
                                                         }
                                                     }
+
+                                                    @Override
+                                                    public void onTopicUpdate(String topicPath, Content content, UpdateContext context) {
+                                                        Out.d("Update for topic '%s'", topicPath);
+                                                    }
                                                 });
+                                            topics.subscribe(">" + topicPath, new CompletionCallback() {
+                                                @Override
+                                                public void onDiscard() {
+                                                    Out.t("ControlClient#topics.onDiscard");
+                                                }
+
+                                                @Override
+                                                public void onComplete() {
+                                                    Out.t("ControlClient#topics.onComplete to topicSelector '%s'", topicPath);
+                                                }
+                                            });
+                                            startFeed(topicPath, updater);
                                         }
-                                    }
 
-                                });
-
-                        break;
-                    case CLOSED_BY_SERVER:
-                        synchronized (controlClientListLock) {
-                            closedByServerControlClients.add(session);
-                            controlClients.remove(session);
+                                        @Override
+                                        public void
+                                            onTopicAddFailed(String topicPath, TopicAddFailReason reason) {
+                                            switch (reason) {
+                                            case EXISTS:
+                                            case EXISTS_MISMATCH:
+                                                startFeed(topicPath, updater);
+                                                break;
+                                            default:
+                                                Out.e("Failed to add topic: '%s' because '%s'", topicPath, reason);
+                                                break;
+                                            }
+                                        }
+                                    });
+                            }
                         }
-                        break;
-                    default:
-                        break;
-                    }
-                    Out.t(
-                        "Done ControlClientCreator#sessionFactory.onSessionStateChanged");
-                }
-            });
 
-        state = CreatorState.INITIALISED;
+                    });
+
+                    break;
+                case CLOSED_BY_SERVER:
+                    synchronized (controlClientListLock) {
+                        closedByServerControlClients.add(session);
+                        controlClients.remove(session);
+                    }
+                    break;
+                default:
+                    break;
+                }
+                Out.t(
+                    "Done ControlClientCreator#sessionFactory.onSessionStateChanged");
+            }
+        });
+
+        state = INITIALISED;
 
         Out.t("Done ControlClientCreator constructor...");
     }
 
-    void startFeed(final String topicPath,final Updater updater) {
+    void startFeed(final String topicPath, final Updater updater) {
         Out.t("ControlClientCreator#startFeed for '%s'", topicPath);
         Out.d("Trying to start ControlClient feed for: '%s'", topicPath);
-        String[] paths = topicPath.split("/");
+        final String[] paths = topicPath.split("/");
         if (paths.length > 4) {
-            Out.d("Found topicPath '%s' elements: '%s', '%s', '%s', '%s', '%s'",
-                topicPath, paths[0], paths[1], "<sessionId>",
-                paths[paths.length - 2],
-                paths[paths.length - 1]);
+            Out.d("Found topicPath '%s' elements: '%s', '%s', '%s', '%s', '%s'", topicPath, paths[0], paths[1], "<sessionId>", paths[paths.length - 2], paths[paths.length - 1]);
             final int messageSizeInBytes =
                 NumberUtils.toInt(paths[paths.length - 2], -1);
             final int messagesPerSecond =
                 NumberUtils.toInt(paths[paths.length - 1], -1);
             if (messageSizeInBytes > 0 && messagesPerSecond > 0) {
-                Out.d(
-                    "Using messageSizeInBytes: '%d' and messagesPerSecond: '%d'",
-                    messageSizeInBytes, messagesPerSecond);
-                Long scheduleIntervalInMillis =
-                    new Long(1000 / messagesPerSecond);
-                Out.d("Updating topic path '%s', every '%d' ms", topicPath,
-                    scheduleIntervalInMillis);
-                ScheduledFuture<?> tmpFuture = Benchmarker.globalThreadPool
-                    .scheduleAtFixedRate(new Runnable() {
-
-                        @Override
-                        public void run() {
-                            Out.d("Update for topic path: '%s'", topicPath);
-                            updater.update(topicPath,
-                                Diffusion.content().newContent(
-                                    createSizedByteArray(messageSizeInBytes)),
-                                updateCallback);
-                        }
-                    }, 0L, scheduleIntervalInMillis, TimeUnit.MILLISECONDS);
+                Out.d("Using messageSizeInBytes: '%d' and messagesPerSecond: '%d'", messageSizeInBytes, messagesPerSecond);
+                final Long scheduleIntervalInMillis = new Long(1000 / messagesPerSecond);
+                Out.d("Updating topic path '%s', every %dms", topicPath, scheduleIntervalInMillis);
+                final ScheduledFuture<?> tmpFuture = Benchmarker.globalThreadPool.scheduleAtFixedRate(new Runnable() {
+                    @Override
+                    public void run() {
+                        Out.d("Update for topic path: '%s'", topicPath);
+                        updater.update(topicPath, Diffusion.content().newContent(createSizedByteArray(messageSizeInBytes)), updateCallback);
+                    }
+                }, 0L, scheduleIntervalInMillis, MILLISECONDS);
 
                 topicUpdatersByTopicPath.put(topicPath, tmpFuture);
                 Out.d("Started controlClient updater for '%s'", topicPath);
             }
             else {
-                Out.e(
-                    "Could not parse topicPath: '%s', found messageSizeInBytes: '%d' and messagesPerSecond: '%d'",
-                    topicPath, messageSizeInBytes,
-                    messagesPerSecond);
+                Out.e("Could not parse topicPath: '%s', found messageSizeInBytes: '%d' and messagesPerSecond: '%d'", topicPath, messageSizeInBytes, messagesPerSecond);
             }
         }
         else {
-            Out.e(
-                "Could not parse topicPath '%s', length was : %d, expected more than 4!",
-                topicPath, paths.length);
+            Out.e("Could not parse topicPath '%s', length was : %d, expected more than 4!", topicPath, paths.length);
         }
         Out.t("Done ControlClientCreator#startFeed for '%s'", topicPath);
     }
 
     String getFullTopicPathForSessionId(SessionId sessionId) {
-        StringBuilder builder = new StringBuilder();
+        final StringBuilder builder = new StringBuilder();
 
-        String sessionIdString = StringUtils.trimToEmpty(
-            (sessionId == null) ? StringUtils.EMPTY : sessionId.toString());
+        final String sessionIdString = StringUtils.trimToEmpty(sessionId == null ? EMPTY : sessionId.toString());
         String tmpStringToSplit = sessionIdString;
 
-        String[] sessIdSplit = sessionIdString.split("-");
+        final String[] sessIdSplit = sessionIdString.split("-");
         if (sessIdSplit.length == 2) {
             builder.append("/");
             builder.append(sessIdSplit[0]);
@@ -391,7 +276,7 @@ public class ControlClientCreator {
     }
 
     byte[] createSizedByteArray(int messageSizeInBytes) {
-        byte[] bytes = new byte[messageSizeInBytes];
+        final byte[] bytes = new byte[messageSizeInBytes];
         ThreadLocalRandom.current().nextBytes(bytes);
         return bytes;
     }
@@ -403,7 +288,7 @@ public class ControlClientCreator {
             doAddControlClientsTest = true;
             doStart();
             // doStartTest();
-            state = CreatorState.STARTED;
+            state = STARTED;
             break;
         default:
             break;
@@ -414,10 +299,8 @@ public class ControlClientCreator {
     @SuppressWarnings("unused")
     private void doStartTest() {
 
-        final BlockingQueue<Runnable> connectQ =
-            new ArrayBlockingQueue<Runnable>(500);
-        final ThreadPoolExecutor connectThread =
-            new ThreadPoolExecutor(20, 20, 30, TimeUnit.SECONDS, connectQ);
+        final BlockingQueue<Runnable> connectQ = new ArrayBlockingQueue<Runnable>(500);
+        final ThreadPoolExecutor connectThread = new ThreadPoolExecutor(20, 20, 30, SECONDS, connectQ);
         Benchmarker.globalThreadPool.execute(new Runnable() {
 
             @Override
@@ -432,10 +315,8 @@ public class ControlClientCreator {
                             @Override
                             public void run() {
                                 Out.t("Adding session");
-                                Session session =
-                                    sessionFactory.open(connectionString);
+                                final Session session = sessionFactory.open(connectionString);
                                 synchronized (controlClientListLock) {
-                                    // connectingSessions.add(session);
                                     controlClients.add(session);
                                 }
                                 Out.t("Done Adding ControlClient");
@@ -458,7 +339,7 @@ public class ControlClientCreator {
                 public void run() {
                     Out.t("Adding ControlClient");
                     try {
-                        Session session = sessionFactory.open(connectionString);
+                        final Session session = sessionFactory.open(connectionString);
 
                         // session.start();
                         synchronized (controlClientListLock) {
@@ -475,33 +356,17 @@ public class ControlClientCreator {
                             t.getMessage());
                         t.printStackTrace();
                     }
-                    // Out.t("Adding 500 ControlClients");
-                    // List<Session> tmpControlClients = new ArrayList<>();
-                    // for (int i = 0; i < 500; i++) {
-                    // Session session =
-                    // sessionFactory.open(connectionString);
-                    // session.start();
-                    // tmpControlClients.add(session);
-                    // }
-                    // synchronized (controlClientListLock) {
-                    // // connectingControlClients.add(session);
-                    // sessions.addAll(tmpControlClients);
-                    // }
-                    // Out.t("Done Adding 500 ControlClients");
                 }
-            }, 0L, 1L, TimeUnit.MICROSECONDS);
+            }, 0L, 1L, MICROSECONDS);
 
-        // checkControlClient =
-        // Benchmarker.globalThreadPool.scheduleAtFixedRate(new
         Benchmarker.globalThreadPool.scheduleAtFixedRate(new Runnable() {
 
             @Override
             public void run() {
                 Out.t("Checking which ControlClients have connected...");
                 synchronized (controlClientListLock) {
-                    for (Iterator<Session> iter = controlClients.iterator();iter
-                        .hasNext();) {
-                        Session sess = iter.next();
+                    for (Iterator<Session> iter = controlClients.iterator(); iter.hasNext();) {
+                        final Session sess = iter.next();
                         if (!Session.State.CONNECTED_ACTIVE
                             .equals(sess.getState())) {
                             Out.t(
@@ -510,12 +375,10 @@ public class ControlClientCreator {
                             iter.remove();
                         }
                     }
-                    for (Iterator<Session> iter =
-                        connectingControlClients.iterator();iter.hasNext();) {
-                        Session sess = iter.next();
+                    for (Iterator<Session> iter = connectingControlClients.iterator(); iter.hasNext();) {
+                        final Session sess = iter.next();
                         if (sess.getState().isConnected()) {
-                            Out.t(
-                                "Moving connected ControlClient from connectingControlClients to ControlClients");
+                            Out.t("Moving connected ControlClient from connectingControlClients to ControlClients");
                             controlClients.add(sess);
                             iter.remove();
                         }
@@ -523,7 +386,7 @@ public class ControlClientCreator {
                 }
                 Out.t("Done Checking which ControlClient have connected...");
             }
-        }, 1500L, 500L, TimeUnit.MILLISECONDS);
+        }, 1500L, 500L, MILLISECONDS);
 
         Out.t("Done ControlClientCreator#doStart");
     }
@@ -537,7 +400,7 @@ public class ControlClientCreator {
             }
 
             doAddControlClientsTest = false;
-            state = CreatorState.STOPPED;
+            state = STOPPED;
             break;
         default:
             break;
@@ -580,11 +443,86 @@ public class ControlClientCreator {
                     e.printStackTrace();
                 }
             }
-            state = CreatorState.SHUTDOWN;
+            state = SHUTDOWN;
             break;
         default:
             break;
         }
         Out.t("Done ControlClientCreator#shutdown");
     }
+
+    /**
+     * Returns controlClients.
+     *
+     * @return the controlClients
+     */
+    List<Session> getControlClients() {
+        return controlClients;
+    }
+
+    /**
+     * Returns connectingControlClients.
+     *
+     * @return the connectingControlClients
+     */
+    List<Session> getConnectingControlClients() {
+        return connectingControlClients;
+    }
+
+    /**
+     * Returns closedByServerControlClients.
+     *
+     * @return the closedByServerControlClients
+     */
+    List<Session> getClosedByServerControlClients() {
+        return closedByServerControlClients;
+    }
+
+    /**
+     * Returns closedControlClients.
+     *
+     * @return the closedControlClients
+     */
+    List<Session> getClosedControlClients() {
+        return closedControlClients;
+    }
+
+    /**
+     * Returns connectionFailures.
+     *
+     * @return the connectionFailures
+     */
+    int getConnectionFailures() {
+        return connectionFailures;
+    }
+
+    abstract class CCUpdateSource implements UpdateSource {
+
+        @Override
+        public void onRegistered(String topicPath, Registration registration) {
+            Out.d("Registered UpdateSource on topicPath '%s'", topicPath);
+        }
+
+        @Override
+        public void onClose(String topicPath) {
+            Out.d("Closed UpdateSource on topicPath '%s'", topicPath);
+        }
+
+        @Override
+        public void onError(String topicPath, ErrorReason errorReason) {
+            if (ErrorReason.SESSION_CLOSED.equals(errorReason)) {
+                // ignore => saves a bunch of output for now.
+            }
+            else {
+                Out.e("Error on UpdateSource for topicPath '%s' :: '%s'",
+                    topicPath, errorReason);
+            }
+        }
+
+        @Override
+        public void onStandby(String topicPath) {
+            Out.d("UpdateSource on standby for topicPath '%s'", topicPath);
+        }
+    }
+
 }

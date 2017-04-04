@@ -1,5 +1,9 @@
 package com.pushtechnology.consulting;
 
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.SINGLE_VALUE;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.apache.commons.lang3.StringUtils.EMPTY;
+
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -12,7 +16,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -26,55 +29,50 @@ import com.pushtechnology.diffusion.client.topics.details.TopicType;
 
 public class Benchmarker {
 
+    private static final int CLIENT_INBOUND_QUEUE_QUEUE_SIZE = 5000000;
+    private static final int CLIENT_INBOUND_QUEUE_CORE_SIZE = 16;
+    private static final int CLIENT_INBOUND_QUEUE_MAX_SIZE = 16;
+    private static final String CLIENT_INBOUND_THREAD_POOL_NAME = "JavaBenchmarkInboundThreadPool";
+    private static final CountDownLatch RUNNING_LATCH = new CountDownLatch(1);
+
     public enum CreatorState {
         SHUTDOWN, INITIALISED, STOPPED, STARTED,
     }
 
-    public static ScheduledExecutorService globalThreadPool =
-        Executors.newScheduledThreadPool(10);
-    public static ScheduledExecutorService connectThreadPool;
+    private static Publisher publisher;
+    private static ScheduledFuture<?> publisherMonitor;
+    private static SessionCreator sessionCreator;
+    private static ScheduledFuture<?> sessionsCounter;
+    private static ControlClientCreator controlClientCreator;
+    private static ScheduledFuture<?> controlClientCounter;
 
     // params
     private static boolean doPublish;
     private static String publisherConnectionString;
-    private static String publisherUsername = StringUtils.EMPTY;
-    private static String publisherPassword = StringUtils.EMPTY;
-    static Publisher publisher;
-    static ScheduledFuture<?> publisherMonitor;
+    private static String publisherUsername = EMPTY;
+    private static String publisherPassword = EMPTY;
 
     private static boolean doCreateSessions;
     private static String sessionConnectionString;
     private static int maxNumSessions;
-    static SessionCreator sessionCreator;
-    static ScheduledFuture<?> sessionsCounter;
     private static int sessionRate;
     private static int sessionDuration;
 
     private static boolean doCreateControlClients;
     private static String controlClientsConnectionString;
-    private static String controlClientsUsername = StringUtils.EMPTY;
-    private static String controlClientsPassword = StringUtils.EMPTY;
+    private static String controlClientsUsername = EMPTY;
+    private static String controlClientsPassword = EMPTY;
     private static int maxNumControlClients;
-    static ControlClientCreator controlClientCreator;
-    static ScheduledFuture<?> controlClientCounter;
 
     private static List<String> paramTopics = new ArrayList<>();
     private static List<String> myTopics = new ArrayList<>();
     private static List<String> topics = new ArrayList<>();
-    // TODO
-    private static TopicType topicType = TopicType.SINGLE_VALUE;
+    private static TopicType topicType = SINGLE_VALUE;
 
-    private static Set<InetSocketAddress> multiIpClientAddresses =
-        new HashSet<>();
+    private static Set<InetSocketAddress> multiIpClientAddresses = new HashSet<>();
     private static int connectThreadPoolSize = 10;
-
-    // static finals
-    private static final int CLIENT_INBOUND_QUEUE_QUEUE_SIZE = 5000000;
-    private static final int CLIENT_INBOUND_QUEUE_CORE_SIZE = 16;
-    private static final int CLIENT_INBOUND_QUEUE_MAX_SIZE = 16;
-    private static final String CLIENT_INBOUND_THREAD_POOL_NAME =
-        "JavaBenchmarkInboundThreadPool";
-    private static final CountDownLatch RUNNING_LATCH = new CountDownLatch(1);
+    public static ScheduledExecutorService globalThreadPool = Executors.newScheduledThreadPool(10);
+    public static ScheduledExecutorService connectThreadPool;
 
     public static void main(String[] args) throws InterruptedException {
         Out.i("Starting Java Benchmark Suite v%s", Out.version);
@@ -83,10 +81,8 @@ public class Benchmarker {
         try {
             Out.d("Trying to set client InboundThreadPool queue size to '%d'",
                 CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
-            ThreadsConfig threadsConfig =
-                ConfigManager.getConfig().getThreads();
-            ThreadPoolConfig inboundPool =
-                threadsConfig.addPool(CLIENT_INBOUND_THREAD_POOL_NAME);
+            final ThreadsConfig threadsConfig = ConfigManager.getConfig().getThreads();
+            final ThreadPoolConfig inboundPool = threadsConfig.addPool(CLIENT_INBOUND_THREAD_POOL_NAME);
             inboundPool.setQueueSize(CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
             inboundPool.setCoreSize(CLIENT_INBOUND_QUEUE_CORE_SIZE);
             inboundPool.setMaximumSize(CLIENT_INBOUND_QUEUE_MAX_SIZE);
@@ -105,10 +101,8 @@ public class Benchmarker {
             Executors.newScheduledThreadPool(connectThreadPoolSize);
 
         if (doPublish) {
-            Out.i("Creating Publisher with connection string: '%s'",
-                publisherConnectionString);
-            publisher = new Publisher(publisherConnectionString,
-                publisherUsername, publisherPassword, topics, topicType);
+            Out.i("Creating Publisher with connection string: '%s'", publisherConnectionString);
+            publisher = new Publisher(publisherConnectionString, publisherUsername, publisherPassword, topics, topicType);
             publisher.start();
 
             publisherMonitor =
@@ -117,16 +111,12 @@ public class Benchmarker {
                     @Override
                     public void run() {
                         Out.t("publisherMonitor fired");
-                        Out.i("Publisher " +
-                            ((publisher.onStandby) ? "is" : "is not") +
-                            " on standby");
+                        Out.i("Publisher " + ((publisher.isOnStandby()) ? "is" : "is not") + " on standby");
                         Out.i(
                             "There are %d publishers running for topics: '%s'",
-                            publisher.topicUpdatersByTopic.size(),
-                            ArrayUtils.toString(
-                                publisher.topicUpdatersByTopic.keySet()));
-                        for (ScheduledFuture<?> svc : publisher.topicUpdatersByTopic
-                            .values()) {
+                            publisher.getTopicUpdatersByTopic().size(),
+                            ArrayUtils.toString(publisher.getTopicUpdatersByTopic().keySet()));
+                        for (ScheduledFuture<?> svc : publisher.getTopicUpdatersByTopic().values()) {
                             if (svc.isCancelled()) {
                                 Out.d("Service is cancelled...");
                             }
@@ -136,63 +126,40 @@ public class Benchmarker {
                         }
                         Out.t("Done publisherMonitor fired");
                     }
-                }, 2L, 5L, TimeUnit.SECONDS);
+                }, 2L, 5L, SECONDS);
         }
 
         if (doCreateSessions) {
 
             if (maxNumSessions > 0) {
-                Out.i("Creating %d Sessions with connection string: '%s'",
-                    maxNumSessions, sessionConnectionString);
+                Out.i("Creating %d Sessions with connection string: '%s'", maxNumSessions, sessionConnectionString);
             }
             else {
-                Out.i("Creating Sessions with connection string: '%s'",
-                    sessionConnectionString);
-                Out.i(
-                    "Creating Sessions at %d/second, disconnecting after %d seconds",
-                    sessionRate, sessionDuration);
+                Out.i("Creating Sessions with connection string: '%s'", sessionConnectionString);
+                Out.i("Creating Sessions at %d/second, disconnecting after %d seconds", sessionRate, sessionDuration);
             }
-            sessionCreator = new SessionCreator(sessionConnectionString,
-                myTopics, topicType);
+            sessionCreator = new SessionCreator(sessionConnectionString, myTopics, topicType);
 
-            Out.i(
-                "Sessions: [Connected] [Started] [Recovering] [Closed] [Ended] [Failed]  | Messages: [Number] [Bytes]");
+            Out.i("Sessions: [Connected] [Started] [Recovering] [Closed] [Ended] [Failed]  | Messages: [Number] [Bytes]");
             sessionsCounter =
                 globalThreadPool.scheduleAtFixedRate(new Runnable() {
 
                     @Override
                     public void run() {
                         Out.t("sessionsCounter fired");
-                        // Out.i("====== Session Status ======");
-                        // Out.i(" %d connected",
-                        // sessionCreator.connectedSessions.get());
-                        // Out.i(" %d message since",
-                        // sessionCreator.messageCount.getAndSet(0));
-                        // Out.i(" %d message bytes since",
-                        // sessionCreator.messageByteCount.getAndSet(0));
-                        // Out.i(" %d reconnecting",
-                        // sessionCreator.recoveringSessions.get());
-                        // Out.i(" %d closed",
-                        // sessionCreator.closedSessions.get());
-                        // Out.i(" %d started",
-                        // sessionCreator.startedSessions.get());
-                        // Out.i(" %d ended",
-                        // sessionCreator.endedSessions.get());
-                        // Out.i(" %d failed to start",
-                        // sessionCreator.connectionFailures.get());
                         Out.i("Sessions: %d %d %d %d %d %d  | Messages: %d %d",
-                            sessionCreator.connectedSessions.get(),
-                            sessionCreator.startedSessions.get(),
-                            sessionCreator.recoveringSessions.get(),
-                            sessionCreator.closedSessions.get(),
-                            sessionCreator.endedSessions.get(),
-                            sessionCreator.connectionFailures.get(),
+                            sessionCreator.getConnectedSessions().get(),
+                            sessionCreator.getStartedSessions().get(),
+                            sessionCreator.getRecoveringSessions().get(),
+                            sessionCreator.getClosedSessions().get(),
+                            sessionCreator.getEndedSessions().get(),
+                            sessionCreator.getConnectionFailures().get(),
 
-                            sessionCreator.messageCount.getAndSet(0),
-                            sessionCreator.messageByteCount.getAndSet(0));
+                            sessionCreator.getMessageCount().getAndSet(0),
+                            sessionCreator.getMessageByteCount().getAndSet(0));
                         Out.t("Done sessionsCounter fired");
                     }
-                }, 0L, 5L, TimeUnit.SECONDS);
+                }, 0L, 5L, SECONDS);
 
             if (maxNumSessions > 0) {
                 sessionCreator.start(multiIpClientAddresses, maxNumSessions);
@@ -204,42 +171,28 @@ public class Benchmarker {
         }
 
         if (doCreateControlClients) {
-            Out.i("Creating %d ControlClients with connection string: '%s'",
-                maxNumControlClients, controlClientsConnectionString);
-            controlClientCreator = new ControlClientCreator(
-                controlClientsConnectionString, controlClientsUsername,
-                controlClientsPassword, paramTopics);
+            Out.i("Creating %d ControlClients with connection string: '%s'", maxNumControlClients, controlClientsConnectionString);
+            controlClientCreator = new ControlClientCreator(controlClientsConnectionString, controlClientsUsername, controlClientsPassword, paramTopics);
             controlClientCreator.start();
 
-            controlClientCounter =
-                globalThreadPool.scheduleAtFixedRate(new Runnable() {
+            controlClientCounter = globalThreadPool.scheduleAtFixedRate(new Runnable() {
 
                     @Override
                     public void run() {
                         Out.t("controlClientCounter fired");
                         Out.i("====== ControlClient Status ======");
-                        Out.i("       %d connected",
-                            controlClientCreator.controlClients.size());
-                        Out.i("       %d attempting to connect",
-                            controlClientCreator.connectingControlClients
-                                .size());
-                        Out.i("       %d closed by server",
-                            controlClientCreator.closedByServerControlClients
-                                .size());
-                        Out.i("       %d closed",
-                            controlClientCreator.closedControlClients.size());
-                        Out.i("       %d failed",
-                            controlClientCreator.connectionFailures);
-                        if (controlClientCreator.controlClients
-                            .size() > maxNumControlClients) {
-                            Out.i(
-                                "Reached at least %d ControlClients, stopping adding ControlClients...",
-                                maxNumControlClients);
+                        Out.i("       %d connected", controlClientCreator.getControlClients().size());
+                        Out.i("       %d attempting to connect", controlClientCreator.getConnectingControlClients().size());
+                        Out.i("       %d closed by server", controlClientCreator.getClosedByServerControlClients().size());
+                        Out.i("       %d closed", controlClientCreator.getClosedControlClients().size());
+                        Out.i("       %d failed", controlClientCreator.getConnectionFailures());
+                        if (controlClientCreator.getControlClients().size() > maxNumControlClients) {
+                            Out.i("Reached at least %d ControlClients, stopping adding ControlClients...", maxNumControlClients);
                             controlClientCreator.stop();
                         }
                         Out.t("Done controlClientCounter fired");
                     }
-                }, 2L, 5L, TimeUnit.SECONDS);
+                }, 2L, 5L, SECONDS);
         }
 
         RUNNING_LATCH.await();
@@ -261,7 +214,7 @@ public class Benchmarker {
 
         if (!globalThreadPool.isTerminated()) {
             try {
-                globalThreadPool.awaitTermination(1L, TimeUnit.SECONDS);
+                globalThreadPool.awaitTermination(1L, SECONDS);
             }
             catch (InterruptedException e) {
                 e.printStackTrace();
@@ -274,14 +227,14 @@ public class Benchmarker {
 
     static void parseArgs(String[] args) {
         Out.t("Parsing args...");
-        if (args == null) {
+        if (args == null || args.length == 0) {
             Out.usage(1,
-                "Parameters are required, please ensure that these have been provided!!!");
+                "Parameters are required, please ensure that these have been provided");
+            return;
         }
-        String errStr =
-            "'%s' takes %d parameters, please check the usage and try again!";
+        final String errStr = "'%s' takes %d parameters, please check the usage and try again";
         String tmpParam;
-        for (int i = 0;i < args.length;i++) {
+        for (int i = 0; i < args.length; i++) {
             tmpParam = args[i];
             switch (tmpParam) {
             case "-logLevel":
@@ -300,12 +253,12 @@ public class Benchmarker {
                 break;
             case "-multiIpRange":
                 if (hasNext(args, i, 1)) {
-                    String prefix = args[++i];
+                    final String prefix = args[++i];
                     if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
-                        String startIp = args[++i];
+                        final String startIp = args[++i];
                         if (hasNext(args, i, 1) &&
                             !args[i + 1].startsWith("-")) {
-                            String endIp = args[++i];
+                            final String endIp = args[++i];
                             multiIpByRange(prefix, Integer.parseInt(startIp),
                                 Integer.parseInt(endIp));
                         }
@@ -405,7 +358,7 @@ public class Benchmarker {
                     StringUtils.join(paramTopics, " || "));
                 if (paramTopics.size() == 0) {
                     Out.usage(1,
-                        "'-topics' requires at least 1 parameter, please check the usage and try again!");
+                        "'-topics' requires at least 1 parameter, please check the usage and try again");
                 }
                 break;
             case "-myTopics":
@@ -422,7 +375,7 @@ public class Benchmarker {
                     StringUtils.join(myTopics, " || "));
                 if (myTopics.size() == 0) {
                     Out.usage(1,
-                        "'-myTopics' requires at least 1 parameter, please check the usage and try again!");
+                        "'-myTopics' requires at least 1 parameter, please check the usage and try again");
                 }
                 break;
             case "-topicType":
@@ -436,38 +389,31 @@ public class Benchmarker {
                 break;
             default:
                 Out.usage(1,
-                    "Found invalid argument: '%s', please check the usage and try again!",
+                    "Found invalid argument: '%s', please check the usage and try again",
                     tmpParam);
                 break;
             }
         }
 
         topics.addAll(paramTopics);
-        // for (String tmpTopic : paramTopics) {
-        // topics.add(String.format("%s/%s", ROOT_TOPIC, tmpTopic));
-        // }
-
         myTopics.addAll(topics);
 
         Out.t("Done parsing args...");
     }
 
-    static boolean hasNext(String[] args,int index,int numNeeded) {
-        return (args.length > (index + numNeeded));
+    static boolean hasNext(String[] args, int index, int numNeeded) {
+        return args.length > (index + numNeeded);
     }
 
     static void multiIpByHostname() {
 
         Out.t("Looking for InetAddesses on localhost");
         try {
-            Out.d("Hostname is : '%s'",
-                InetAddress.getLocalHost().getHostName());
-            for (InetAddress tmpAddr : InetAddress
-                .getAllByName(InetAddress.getLocalHost().getHostName())) {
+            Out.d("Hostname is : '%s'", InetAddress.getLocalHost().getHostName());
+            for (InetAddress tmpAddr : InetAddress.getAllByName(InetAddress.getLocalHost().getHostName())) {
                 if (tmpAddr instanceof Inet4Address) {
                     Out.t("    Found IP: %s", tmpAddr.getHostAddress());
-                    multiIpClientAddresses.add(
-                        new InetSocketAddress(tmpAddr.getHostAddress(), 0));
+                    multiIpClientAddresses.add(new InetSocketAddress(tmpAddr.getHostAddress(), 0));
                 }
             }
             for (InetSocketAddress tmp : multiIpClientAddresses) {
@@ -485,13 +431,11 @@ public class Benchmarker {
         }
     }
 
-    static void multiIpByRange(String prefix,int start,int end) {
-        Out.d("Using InetAddesses from %s.%s to %s.%s", prefix, start, prefix,
-            end);
-        for (int i = start;i <= end;i++) {
+    static void multiIpByRange(String prefix, int start, int end) {
+        Out.d("Using InetAddesses from %s.%s to %s.%s", prefix, start, prefix, end);
+        for (int i = start; i <= end; i++) {
             Out.t("Adding IP '%s.%s'", prefix, i);
-            multiIpClientAddresses.add(
-                new InetSocketAddress(String.format("%s.%s", prefix, i), 0));
+            multiIpClientAddresses.add(new InetSocketAddress(String.format("%s.%s", prefix, i), 0));
         }
         for (InetSocketAddress tmp : multiIpClientAddresses) {
             if (tmp.isUnresolved()) {
