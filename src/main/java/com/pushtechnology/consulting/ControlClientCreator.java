@@ -299,8 +299,7 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
                         synchronized (controlClientListLock) {
                             connectionFailures++;
                         }
-                        Out.e("Exception caught trying to connect: '%s'",
-                            t.getMessage());
+                        Out.e("Exception caught trying to connect: '%s'", t.getMessage());
                         t.printStackTrace();
                     }
                 }

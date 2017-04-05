@@ -47,16 +47,20 @@ public final class Benchmarker {
     private static ControlClientCreator controlClientCreator;
     private static ScheduledFuture<?> controlClientCounter;
 
-    // params
+    /** Create and regularly update topics */
     private static boolean doPublish;
     private static String publisherConnectionString;
     private static String publisherUsername = EMPTY;
     private static String publisherPassword = EMPTY;
 
+    /** Connect sessions, and subscribe. Optionally churn those sessions */
     private static boolean doCreateSessions;
     private static String sessionConnectionString;
     private static int maxNumSessions;
+
+    /** Sessions created per second. */
     private static int sessionRate;
+    /** Session duration in ms. */
     private static int sessionDuration;
 
     private static boolean doCreateControlClients;
@@ -66,6 +70,7 @@ public final class Benchmarker {
     private static int maxNumControlClients;
 
     private static List<String> paramTopics = new ArrayList<>();
+    /** Subscribed topics */
     private static List<String> myTopics = new ArrayList<>();
     private static List<String> topics = new ArrayList<>();
     private static TopicType topicType = SINGLE_VALUE;
@@ -80,17 +85,14 @@ public final class Benchmarker {
         parseArgs(args);
 
         try {
-            Out.d("Trying to set client InboundThreadPool queue size to '%d'",
-                CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
+            Out.d("Trying to set client InboundThreadPool queue size to '%d'", CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
             final ThreadsConfig threadsConfig = ConfigManager.getConfig().getThreads();
             final ThreadPoolConfig inboundPool = threadsConfig.addPool(CLIENT_INBOUND_THREAD_POOL_NAME);
             inboundPool.setQueueSize(CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
             inboundPool.setCoreSize(CLIENT_INBOUND_QUEUE_CORE_SIZE);
             inboundPool.setMaximumSize(CLIENT_INBOUND_QUEUE_MAX_SIZE);
             threadsConfig.setInboundPool(CLIENT_INBOUND_THREAD_POOL_NAME);
-            Out.d(
-                "Successfully set client InboundThreadPool queue size to '%d'",
-                CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
+            Out.d( "Successfully set client InboundThreadPool queue size to '%d'", CLIENT_INBOUND_QUEUE_QUEUE_SIZE);
         }
         catch (APIException ex) {
             Out.e("Failed to set client inbound pool size to '%d'",
@@ -286,6 +288,8 @@ public final class Benchmarker {
                 }
                 break;
             case "-sessionsRate":
+                /* fall through */
+            case "-sessionRate":
                 if (hasNext(args, i, 1)) {
                     doCreateSessions = true;
                     sessionConnectionString = args[++i];

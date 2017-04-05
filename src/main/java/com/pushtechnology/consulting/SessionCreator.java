@@ -51,8 +51,10 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
 /*package*/ final class SessionCreator {
 
+    private static volatile ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
+
     private SessionFactory sessionFactory;
-    private final String connectionString[];
+    private final String connectionString[]; //FIXME: *not* a string despite its name
     private List<TopicSelector> topicSelectors = new ArrayList<>();
     private List<ScheduledFuture<?>> addSessions = new ArrayList<>();
     private final Object sessionSetLock = new Object();
@@ -72,11 +74,12 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     // Set the maximum amount of time we'll try and reconnect for to 10 minutes.
     private final int maximumTimeoutDurationMs = 1000 * 60 * 10;
 
+
+
     private CreatorState state;
     private final TopicType topicType;
 
-    public SessionCreator(String connectionString,List<String> topicSelectors,
-        TopicType topicType) {
+    public SessionCreator(String connectionString, List<String> topicSelectors, TopicType topicType) {
         Out.t("SessionCreator constructor...");
 
         this.connectionString = connectionString.split("[,]");
@@ -97,7 +100,6 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
         this.sessionFactory = Diffusion.sessions()
             .connectionTimeout(60 * 1000)
-            .reconnectionTimeout(120 * 1000)
             .recoveryBufferSize(8000)
             .reconnectionStrategy(new ReconnectionStrategy() {
 
@@ -105,31 +107,28 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                 public void performReconnection(
                     final ReconnectionAttempt reconnection) {
                     Benchmarker.globalThreadPool.schedule(new Runnable() {
-
                         @Override
                         public void run() {
                             reconnection.start();
                         }
                     }, getRandomReconnect(maxReconnectionIntervalSec), SECONDS);
                 }
+
             })
             .reconnectionTimeout(maximumTimeoutDurationMs)
             .errorHandler(new ErrorHandler() {
 
                 @Override
                 public void onError(Session session,SessionError err) {
-                    Out.e("SessionCreator#sessionFactory.onError : '%s'",
-                        err.getMessage());
+                    Out.e("SessionCreator#sessionFactory.onError : '%s'", err.getMessage());
                 }
+
             }).listener(new Listener() {
 
                 @Override
-                public void onSessionStateChanged(Session session,
-                    State oldState,State newState) {
-                    Out.t(
-                        "SessionCreator#sessionFactory.onSessionStateChanged");
-                    Out.t("Session state changed from '%s' to '%s'", oldState,
-                        newState);
+                public void onSessionStateChanged(Session session, State oldState,State newState) {
+                    Out.t("SessionCreator#sessionFactory.onSessionStateChanged");
+                    Out.t("Session state changed from '%s' to '%s'", oldState, newState);
 
                     if (!oldState.isConnected() && newState.isConnected()) {
                         connectedSessions.incrementAndGet();
@@ -166,13 +165,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                         }
                     }
 
-                    Out.t(
-                        "Done SessionCreator#sessionFactory.onSessionStateChanged");
+                    Out.t("Done SessionCreator#sessionFactory.onSessionStateChanged");
                 }
             });
 
         state = INITIALISED;
-
         Out.t("Done SessionCreator constructor...");
     }
 
@@ -230,15 +227,17 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         final List<CountDownLatch> subscribeCdlList = new ArrayList<>();
 
         do {
-            for (InetSocketAddress tmpAddress : myClientAddresses) {
-                final InetSocketAddress myAddress = tmpAddress;
+            for (InetSocketAddress myAddress : myClientAddresses) {
                 addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
                     @Override
                     public void run() {
                         Out.t("Adding session");
                         try {
                             /* ASYNC session creation */
-                            sessionFactory.localSocketAddress(myAddress).open(getConnectionString(), new OpenCallback(sessionsLatch, subscribeCdlList));
+                            sessionFactory
+                                .localSocketAddress(myAddress)
+                                .open(getConnectionString(), new OpenCallback(sessionsLatch, subscribeCdlList));
+                                // FIXME: Non obvious update of `subscribeCdlList`
                             Out.t("Done submitting session open");
                         }
                         catch (Throwable t) {
@@ -253,9 +252,6 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                     }
 
                     private String getConnectionString() {
-                        if (connectionString.length == 1) {
-                            return connectionString[0];
-                        }
                         final ThreadLocalRandom rnd = ThreadLocalRandom.current();
                         return connectionString[rnd.nextInt(connectionString.length)];
                     }
@@ -317,13 +313,10 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         boolean writtenSteadyStateFlagFile = false;
 
         do {
-            for (InetSocketAddress tmpAddress : myClientAddresses) {
-                final InetSocketAddress myAddress = tmpAddress;
+            for (InetSocketAddress myAddress : myClientAddresses) {
                 try {
                     startedSessions.incrementAndGet();
                     Benchmarker.connectThreadPool.submit(new Runnable() {
-
-                        final ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
                         @Override
                         public void run() {
@@ -334,7 +327,6 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                                 sessionFactory
                                     .localSocketAddress(myAddress)
                                     .open(getConnectionString(), new OtherOpenCallback(sessionDurationSec));
-
                                 Out.t("Done submitting session open");
                             }
                             catch (Throwable t) {
@@ -344,14 +336,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                                 if (Out.doLog(Out.OutLevel.DEBUG)) {
                                     t.printStackTrace();
                                 }
-
                             }
                         }
 
                         private String getConnectionString() {
-                            if (connectionString.length == 1) {
-                                return connectionString[0];
-                            }
+                            final ThreadLocalRandom rnd = ThreadLocalRandom.current();
                             return connectionString[rnd.nextInt(connectionString.length)];
                         }
                     });
@@ -373,7 +362,6 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     }
 
     private void subscribe(List<TopicSelector> topicSelectors, Session session, CompletionCallback completionCallback) {
-
         for (TopicSelector sel : topicSelectors) {
             final Topics topicFeature = session.feature(Topics.class);
             if (topicType == SINGLE_VALUE) {
@@ -390,15 +378,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         }
     }
 
-
     private void updateCounters(String topic,int length) {
         Out.d("onTopicUpdate for topic '%s'", topic);
         messageCount.incrementAndGet();
         messageByteCount.addAndGet(length);
     }
-
-    private static volatile ScheduledExecutorService closeExecutor =
-        Executors.newScheduledThreadPool(10);
 
     protected void setupDisconnectPhase(Session session,long sessionDuration) {
         if (sessionDuration > 0) {
@@ -463,8 +447,6 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     }
 
     /**
-     * Returns connectedSessions.
-     *
      * @return the connectedSessions
      */
     AtomicInteger getConnectedSessions() {
@@ -582,15 +564,13 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             final CountDownLatch cdl = new CountDownLatch(topicSelectors.size());
             subscribe(topicSelectors, session, new CompletionCallback() {
                 @Override
-                public void
-                    onDiscard() {
+                public void onDiscard() {
                     Out.t("SessionCreator#topics.onDiscard");
                     cdl.countDown();
                 }
 
                 @Override
-                public void
-                    onComplete() {
+                public void onComplete() {
                     Out.t("SessionCreator#topics.onComplete");
                     cdl.countDown();
                 }
