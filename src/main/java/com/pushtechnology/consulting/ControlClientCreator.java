@@ -52,7 +52,7 @@ import com.pushtechnology.diffusion.client.session.SessionId;
 import com.pushtechnology.diffusion.client.topics.details.TopicDetails;
 import com.pushtechnology.diffusion.client.types.UpdateContext;
 
-/*package*/ class ControlClientCreator {
+/*package*/ final class ControlClientCreator {
 
     private SessionFactory sessionFactory;
     private final String connectionString;
@@ -140,60 +140,7 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
                         public void onActive(String topicPath, final Updater updater) {
                             Out.d("UpdateSource active for topicPath '%s'", topicPath);
                             for (String top : updateTopics) {
-                                topicControlFeature.addTopic(baseControlClientTopic + "/" + top, SINGLE_VALUE, new AddCallback.Default() {
-
-                                        @Override
-                                        public void onTopicAdded(final String topicPath) {
-                                            Out.d("Added topic '%s', starting feed...", topicPath);
-                                            final Topics topics = session.feature(Topics.class);
-                                            topics.addTopicStream(">" + topicPath,
-                                                new TopicStream.Default() {
-
-                                                    @Override
-                                                    public void onSubscription(String topic, TopicDetails details) {
-                                                        Out.d("Subscribed to topic '%s'", topic);
-                                                    }
-
-                                                    @Override
-                                                    public void onError(ErrorReason reason) {
-                                                        if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
-                                                            Out.e("TopicStream::OnError '%s'", reason);
-                                                        }
-                                                    }
-
-                                                    @Override
-                                                    public void onTopicUpdate(String topicPath, Content content, UpdateContext context) {
-                                                        Out.d("Update for topic '%s'", topicPath);
-                                                    }
-                                                });
-                                            topics.subscribe(">" + topicPath, new CompletionCallback() {
-                                                @Override
-                                                public void onDiscard() {
-                                                    Out.t("ControlClient#topics.onDiscard");
-                                                }
-
-                                                @Override
-                                                public void onComplete() {
-                                                    Out.t("ControlClient#topics.onComplete to topicSelector '%s'", topicPath);
-                                                }
-                                            });
-                                            startFeed(topicPath, updater);
-                                        }
-
-                                        @Override
-                                        public void
-                                            onTopicAddFailed(String topicPath, TopicAddFailReason reason) {
-                                            switch (reason) {
-                                            case EXISTS:
-                                            case EXISTS_MISMATCH:
-                                                startFeed(topicPath, updater);
-                                                break;
-                                            default:
-                                                Out.e("Failed to add topic: '%s' because '%s'", topicPath, reason);
-                                                break;
-                                            }
-                                        }
-                                    });
+                                topicControlFeature.addTopic(baseControlClientTopic + "/" + top, SINGLE_VALUE, new MyAddCallback(session, updater));
                             }
                         }
 
@@ -452,8 +399,6 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
     }
 
     /**
-     * Returns controlClients.
-     *
      * @return the controlClients
      */
     List<Session> getControlClients() {
@@ -461,8 +406,6 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
     }
 
     /**
-     * Returns connectingControlClients.
-     *
      * @return the connectingControlClients
      */
     List<Session> getConnectingControlClients() {
@@ -470,8 +413,6 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
     }
 
     /**
-     * Returns closedByServerControlClients.
-     *
      * @return the closedByServerControlClients
      */
     List<Session> getClosedByServerControlClients() {
@@ -479,8 +420,6 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
     }
 
     /**
-     * Returns closedControlClients.
-     *
      * @return the closedControlClients
      */
     List<Session> getClosedControlClients() {
@@ -488,12 +427,71 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
     }
 
     /**
-     * Returns connectionFailures.
-     *
      * @return the connectionFailures
      */
     int getConnectionFailures() {
         return connectionFailures;
+    }
+
+    //FIXME: needs a better name
+    private final class MyAddCallback extends AddCallback.Default {
+        private final Session session;
+        private final Updater updater;
+
+        private MyAddCallback(Session session,Updater updater) {
+            this.session = session;
+            this.updater = updater;
+        }
+
+        @Override
+        public void onTopicAdded(final String topicPath) {
+            Out.d("Added topic '%s', starting feed...", topicPath);
+            final Topics topics = session.feature(Topics.class);
+            topics.addTopicStream(">" + topicPath, new TopicStream.Default() {
+                @Override
+                public void onSubscription(String topic, TopicDetails details) {
+                    Out.d("Subscribed to topic '%s'", topic);
+                }
+
+                @Override
+                public void onError(ErrorReason reason) {
+                    if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
+                        Out.e("TopicStream::OnError '%s'", reason);
+                    }
+                }
+
+                @Override
+                public void onTopicUpdate(String topicPath, Content content, UpdateContext context) {
+                    Out.d("Update for topic '%s'", topicPath);
+                }
+            });
+            topics.subscribe(">" + topicPath, new CompletionCallback() {
+                @Override
+                public void onDiscard() {
+                    Out.t("ControlClient#topics.onDiscard");
+                }
+
+                @Override
+                public void onComplete() {
+                    Out.t("ControlClient#topics.onComplete to topicSelector '%s'", topicPath);
+                }
+            });
+            startFeed(topicPath, updater);
+        }
+
+        @Override
+        public void
+            onTopicAddFailed(String topicPath, TopicAddFailReason reason) {
+            switch (reason) {
+            case EXISTS:
+            case EXISTS_MISMATCH:
+                startFeed(topicPath, updater);
+                break;
+            default:
+                Out.e("Failed to add topic: '%s' because '%s'", topicPath, reason);
+                break;
+            }
+        }
     }
 
     abstract class CCUpdateSource implements UpdateSource {

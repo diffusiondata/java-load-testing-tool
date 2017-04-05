@@ -1,8 +1,11 @@
 package com.pushtechnology.consulting;
 
+import static com.pushtechnology.consulting.Out.OutLevel.parse;
 import static com.pushtechnology.diffusion.client.topics.details.TopicType.SINGLE_VALUE;
+import static java.lang.Integer.parseInt;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.StringUtils.EMPTY;
+import static org.apache.commons.lang3.StringUtils.join;
 
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -18,16 +21,14 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 
 import org.apache.commons.lang3.ArrayUtils;
-import org.apache.commons.lang3.StringUtils;
 
-import com.pushtechnology.consulting.Out.OutLevel;
 import com.pushtechnology.diffusion.api.APIException;
 import com.pushtechnology.diffusion.api.config.ConfigManager;
 import com.pushtechnology.diffusion.api.config.ThreadPoolConfig;
 import com.pushtechnology.diffusion.api.config.ThreadsConfig;
 import com.pushtechnology.diffusion.client.topics.details.TopicType;
 
-public class Benchmarker {
+public final class Benchmarker {
 
     private static final int CLIENT_INBOUND_QUEUE_QUEUE_SIZE = 5000000;
     private static final int CLIENT_INBOUND_QUEUE_CORE_SIZE = 16;
@@ -97,40 +98,35 @@ public class Benchmarker {
             ex.printStackTrace();
         }
 
-        connectThreadPool =
-            Executors.newScheduledThreadPool(connectThreadPoolSize);
+        connectThreadPool = Executors.newScheduledThreadPool(connectThreadPoolSize);
 
         if (doPublish) {
             Out.i("Creating Publisher with connection string: '%s'", publisherConnectionString);
             publisher = new Publisher(publisherConnectionString, publisherUsername, publisherPassword, topics, topicType);
             publisher.start();
 
-            publisherMonitor =
-                globalThreadPool.scheduleAtFixedRate(new Runnable() {
-
-                    @Override
-                    public void run() {
-                        Out.t("publisherMonitor fired");
-                        Out.i("Publisher " + ((publisher.isOnStandby()) ? "is" : "is not") + " on standby");
-                        Out.i(
-                            "There are %d publishers running for topics: '%s'",
-                            publisher.getTopicUpdatersByTopic().size(),
-                            ArrayUtils.toString(publisher.getTopicUpdatersByTopic().keySet()));
-                        for (ScheduledFuture<?> svc : publisher.getTopicUpdatersByTopic().values()) {
-                            if (svc.isCancelled()) {
-                                Out.d("Service is cancelled...");
-                            }
-                            if (svc.isDone()) {
-                                Out.d("Service is done...");
-                            }
+            publisherMonitor = globalThreadPool.scheduleAtFixedRate(new Runnable() {
+                @Override
+                public void run() {
+                    Out.t("publisherMonitor fired");
+                    Out.i("Publisher " + ((publisher.isOnStandby()) ? "is" : "is not") + " on standby");
+                    Out.i("There are %d publishers running for topics: '%s'",
+                        publisher.getTopicUpdatersByTopic().size(),
+                        ArrayUtils.toString(publisher.getTopicUpdatersByTopic().keySet()));
+                    for (ScheduledFuture<?> svc : publisher.getTopicUpdatersByTopic().values()) {
+                        if (svc.isCancelled()) {
+                            Out.d("Service is cancelled...");
                         }
-                        Out.t("Done publisherMonitor fired");
+                        if (svc.isDone()) {
+                            Out.d("Service is done...");
+                        }
                     }
-                }, 2L, 5L, SECONDS);
+                    Out.t("Done publisherMonitor fired");
+                }
+            }, 2L, 5L, SECONDS);
         }
 
         if (doCreateSessions) {
-
             if (maxNumSessions > 0) {
                 Out.i("Creating %d Sessions with connection string: '%s'", maxNumSessions, sessionConnectionString);
             }
@@ -141,32 +137,28 @@ public class Benchmarker {
             sessionCreator = new SessionCreator(sessionConnectionString, myTopics, topicType);
 
             Out.i("Sessions: [Connected] [Started] [Recovering] [Closed] [Ended] [Failed]  | Messages: [Number] [Bytes]");
-            sessionsCounter =
-                globalThreadPool.scheduleAtFixedRate(new Runnable() {
-
-                    @Override
-                    public void run() {
-                        Out.t("sessionsCounter fired");
-                        Out.i("Sessions: %d %d %d %d %d %d  | Messages: %d %d",
-                            sessionCreator.getConnectedSessions().get(),
-                            sessionCreator.getStartedSessions().get(),
-                            sessionCreator.getRecoveringSessions().get(),
-                            sessionCreator.getClosedSessions().get(),
-                            sessionCreator.getEndedSessions().get(),
-                            sessionCreator.getConnectionFailures().get(),
-
-                            sessionCreator.getMessageCount().getAndSet(0),
-                            sessionCreator.getMessageByteCount().getAndSet(0));
-                        Out.t("Done sessionsCounter fired");
-                    }
-                }, 0L, 5L, SECONDS);
+            sessionsCounter = globalThreadPool.scheduleAtFixedRate(new Runnable() {
+                @Override
+                public void run() {
+                    Out.t("sessionsCounter fired");
+                    Out.i("Sessions: %d %d %d %d %d %d  | Messages: %d %d",
+                        sessionCreator.getConnectedSessions().get(),
+                        sessionCreator.getStartedSessions().get(),
+                        sessionCreator.getRecoveringSessions().get(),
+                        sessionCreator.getClosedSessions().get(),
+                        sessionCreator.getEndedSessions().get(),
+                        sessionCreator.getConnectionFailures().get(),
+                        sessionCreator.getMessageCount().getAndSet(0),
+                        sessionCreator.getMessageByteCount().getAndSet(0));
+                    Out.t("Done sessionsCounter fired");
+                }
+            }, 0L, 5L, SECONDS);
 
             if (maxNumSessions > 0) {
                 sessionCreator.start(multiIpClientAddresses, maxNumSessions);
             }
             else {
-                sessionCreator.start(multiIpClientAddresses, sessionRate,
-                    sessionDuration);
+                sessionCreator.start(multiIpClientAddresses, sessionRate, sessionDuration);
             }
         }
 
@@ -228,18 +220,16 @@ public class Benchmarker {
     static void parseArgs(String[] args) {
         Out.t("Parsing args...");
         if (args == null || args.length == 0) {
-            Out.usage(1,
-                "Parameters are required, please ensure that these have been provided");
+            Out.usage(1, "Parameters are required, please ensure that these have been provided");
             return;
         }
         final String errStr = "'%s' takes %d parameters, please check the usage and try again";
-        String tmpParam;
         for (int i = 0; i < args.length; i++) {
-            tmpParam = args[i];
-            switch (tmpParam) {
+            final String arg = args[i];
+            switch (arg) {
             case "-logLevel":
                 if (hasNext(args, i, 1)) {
-                    Out.setLogLevel(OutLevel.parse(args[++i]));
+                    Out.setLogLevel(parse(args[++i]));
                 }
                 else {
                     Out.usage(1, errStr, "-logLevel", 1);
@@ -256,11 +246,9 @@ public class Benchmarker {
                     final String prefix = args[++i];
                     if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
                         final String startIp = args[++i];
-                        if (hasNext(args, i, 1) &&
-                            !args[i + 1].startsWith("-")) {
+                        if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
                             final String endIp = args[++i];
-                            multiIpByRange(prefix, Integer.parseInt(startIp),
-                                Integer.parseInt(endIp));
+                            multiIpByRange(prefix, parseInt(startIp), parseInt(endIp));
                         }
                     }
                 }
@@ -274,15 +262,12 @@ public class Benchmarker {
                     publisherConnectionString = args[++i];
                     if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
                         publisherUsername = args[++i];
-                        if (hasNext(args, i, 1) &&
-                            !args[i + 1].startsWith("-")) {
+                        if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
                             publisherPassword = args[++i];
                         }
                     }
-                    Out.d(
-                        "Creating Publisher with connection string: '%s', username: '%s' and password: '%s'",
-                        publisherConnectionString, publisherUsername,
-                        publisherPassword);
+                    Out.d("Creating Publisher with connection string: '%s', username: '%s' and password: '%s'",
+                        publisherConnectionString, publisherUsername, publisherPassword);
                 }
                 else {
                     Out.usage(1, errStr, "-publish", 1);
@@ -292,7 +277,7 @@ public class Benchmarker {
                 if (hasNext(args, i, 1)) {
                     doCreateSessions = true;
                     sessionConnectionString = args[++i];
-                    maxNumSessions = Integer.parseInt(args[++i]);
+                    maxNumSessions = parseInt(args[++i]);
                     Out.d("Creating %d Sessions with connection string: '%s'",
                         maxNumSessions, sessionConnectionString);
                 }
@@ -304,18 +289,16 @@ public class Benchmarker {
                 if (hasNext(args, i, 1)) {
                     doCreateSessions = true;
                     sessionConnectionString = args[++i];
-                    sessionRate = Integer.parseInt(args[++i]);
-                    sessionDuration = Integer.parseInt(args[++i]);
+                    sessionRate = parseInt(args[++i]);
+                    sessionDuration = parseInt(args[++i]);
                     if (hasNext(args, i, 1)) {
-                        connectThreadPoolSize = Integer.parseInt(args[++i]);
-                        if (connectThreadPoolSize > Runtime.getRuntime()
-                            .availableProcessors() * 5) {
+                        connectThreadPoolSize = parseInt(args[++i]);
+                        if (connectThreadPoolSize > Runtime.getRuntime().availableProcessors() * 5) {
                             Out.usage(1, errStr, "-sessionsRate", 3);
                         }
                     }
                     maxNumSessions = 0;
-                    Out.d(
-                        "Creating Sessions at rate %s duration %s with connection string: '%s'",
+                    Out.d("Creating Sessions at rate %s duration %s with connection string: '%s'",
                         sessionRate, sessionDuration, sessionConnectionString);
                 }
                 else {
@@ -326,11 +309,10 @@ public class Benchmarker {
                 if (hasNext(args, i, 1)) {
                     doCreateControlClients = true;
                     controlClientsConnectionString = args[++i];
-                    maxNumControlClients = Integer.parseInt(args[++i]);
+                    maxNumControlClients = parseInt(args[++i]);
                     if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
                         controlClientsUsername = args[++i];
-                        if (hasNext(args, i, 1) &&
-                            !args[i + 1].startsWith("-")) {
+                        if (hasNext(args, i, 1) && !args[i + 1].startsWith("-")) {
                             controlClientsPassword = args[++i];
                         }
                     }
@@ -354,11 +336,9 @@ public class Benchmarker {
                     }
                 }
 
-                Out.d("Using topics: '%s'",
-                    StringUtils.join(paramTopics, " || "));
+                Out.d("Using topics: '%s'", join(paramTopics, " || "));
                 if (paramTopics.size() == 0) {
-                    Out.usage(1,
-                        "'-topics' requires at least 1 parameter, please check the usage and try again");
+                    Out.usage(1, "'-topics' requires at least 1 parameter, please check the usage and try again");
                 }
                 break;
             case "-myTopics":
@@ -371,11 +351,9 @@ public class Benchmarker {
                     }
                 }
 
-                Out.d("Using user topics: '%s'",
-                    StringUtils.join(myTopics, " || "));
+                Out.d("Using user topics: '%s'", join(myTopics, " || "));
                 if (myTopics.size() == 0) {
-                    Out.usage(1,
-                        "'-myTopics' requires at least 1 parameter, please check the usage and try again");
+                    Out.usage(1, "'-myTopics' requires at least 1 parameter, please check the usage and try again");
                 }
                 break;
             case "-topicType":
@@ -388,9 +366,7 @@ public class Benchmarker {
                 }
                 break;
             default:
-                Out.usage(1,
-                    "Found invalid argument: '%s', please check the usage and try again",
-                    tmpParam);
+                Out.usage(1, "Found invalid argument: '%s', please check the usage and try again", arg);
                 break;
             }
         }

@@ -11,7 +11,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/*package*/ class Out {
+/*package*/ final class Out {
 
     public static final String version = Out.class.getPackage().getImplementationVersion();
 

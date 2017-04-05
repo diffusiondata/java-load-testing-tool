@@ -47,7 +47,7 @@ import com.pushtechnology.diffusion.datatype.binary.BinaryDataType;
 import com.pushtechnology.diffusion.datatype.json.JSON;
 import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
-/*package*/ class Publisher {
+/*package*/ final class Publisher {
 
     private final String connectionString;
     private final String rootTopic;
