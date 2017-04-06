@@ -9,13 +9,13 @@ import static com.pushtechnology.diffusion.client.topics.details.TopicType.BINAR
 import static com.pushtechnology.diffusion.client.topics.details.TopicType.JSON;
 import static com.pushtechnology.diffusion.client.topics.details.TopicType.SINGLE_VALUE;
 import static java.lang.Integer.getInteger;
+import static java.util.Arrays.asList;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.StringUtils.join;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -57,7 +57,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     private static volatile ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
 
     private SessionFactory sessionFactory;
-    private final String connectionString[]; //FIXME: *not* a string despite its name
+    private final List<String> connectionStrings;
     private List<TopicSelector> topicSelectors = new ArrayList<>();
     private List<ScheduledFuture<?>> addSessions = new ArrayList<>();
     private final Object sessionSetLock = new Object();
@@ -77,15 +77,13 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     // Set the maximum amount of time we'll try and reconnect for to 10 minutes.
     private final int maximumTimeoutDurationMs = 1000 * 60 * 10;
 
-
-
     private CreatorState state;
     private final TopicType topicType;
 
     public SessionCreator(String connectionString, List<String> topicSelectors, TopicType topicType) {
         LOG.trace("SessionCreator constructor...");
 
-        this.connectionString = connectionString.split("[,]");
+        this.connectionStrings = asList(connectionString.split("[,]"));
         this.topicType = topicType;
         LOG.info("Creating sessions listening to topic selectors: '{}'", join(topicSelectors, ", "));
         for (String topicSelector : topicSelectors) {
@@ -187,11 +185,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         return ThreadLocalRandom.current().nextInt(1, max + 1);
     }
 
-    public void start(final Set<InetSocketAddress> multiIpClientAddresses, int maxNumberSessions) {
+    public void start(int maxNumberSessions) {
         LOG.trace("SessionCreator#start");
         switch (state) {
         case INITIALISED:
-            doStart(multiIpClientAddresses, maxNumberSessions);
+            doStart(maxNumberSessions);
             state = STARTED;
             break;
         default:
@@ -200,11 +198,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         LOG.trace("Done SessionCreator#start");
     }
 
-    public void start(final Set<InetSocketAddress> multiIpClientAddresses, int sessionCreateRatePerSec,long sessionDurationMs) {
+    public void start(int sessionCreateRatePerSec,long sessionDurationMs) {
         LOG.trace("SessionCreator#start");
         switch (state) {
         case INITIALISED:
-            doStart(multiIpClientAddresses, sessionCreateRatePerSec, sessionDurationMs);
+            doStart(sessionCreateRatePerSec, sessionDurationMs);
             state = STARTED;
             break;
         default:
@@ -216,52 +214,43 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     /**
      * Create a finite number of sessions.
      */
-    private void doStart(final Set<InetSocketAddress> multiIpClientAddresses, int maxNumberSessions) {
-        final Set<InetSocketAddress> myClientAddresses = new HashSet<>();
-        if (multiIpClientAddresses == null || multiIpClientAddresses.isEmpty()) {
-            myClientAddresses.add(new InetSocketAddress(0));
-        }
-        else {
-            myClientAddresses.addAll(multiIpClientAddresses);
-        }
-        LOG.trace("SessionCreator#doStart for '{}' sessions and '{}' clientAddress", maxNumberSessions, myClientAddresses.size());
+    private void doStart(int maxNumberSessions) {
+
+        LOG.trace("SessionCreator#doStart for '{}' sessions ", maxNumberSessions);
         long delay = 0L;
         final CountDownLatch sessionsLatch = new CountDownLatch(maxNumberSessions);
         final List<CountDownLatch> subscribeCdlList = new ArrayList<>();
 
         do {
-            for (InetSocketAddress myAddress : myClientAddresses) {
-                addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
-                    @Override
-                    public void run() {
-                        LOG.trace("Adding session");
-                        try {
-                            /* ASYNC session creation */
-                            sessionFactory
-                                .localSocketAddress(myAddress)
-                                .open(getConnectionString(), new OpenCallback(sessionsLatch, subscribeCdlList));
-                                // FIXME: Non obvious update of `subscribeCdlList`
-                            LOG.trace("Done submitting session open");
-                        }
-                        catch (Throwable t) {
-                            /* ASYNC session creation */
-                            connectionFailures.incrementAndGet();
-                            sessionsLatch.countDown();
-                            LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
-                            if(LOG.isDebugEnabled()) {
-                                t.printStackTrace();
-                            }
+            addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
+                @Override
+                public void run() {
+                    LOG.trace("Adding session");
+                    try {
+                        /* ASYNC session creation */
+                        sessionFactory.open(getConnectionString(), new OpenCallback(sessionsLatch, subscribeCdlList));
+                        // FIXME: Non obvious update of `subscribeCdlList`
+                        LOG.trace("Done submitting session open");
+                    }
+                    catch (Throwable t) {
+                        /* ASYNC session creation */
+                        connectionFailures.incrementAndGet();
+                        sessionsLatch.countDown();
+                        LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
+                        if (LOG.isDebugEnabled()) {
+                            t.printStackTrace();
                         }
                     }
+                }
 
-                    private String getConnectionString() {
-                        final ThreadLocalRandom rnd = ThreadLocalRandom.current();
-                        return connectionString[rnd.nextInt(connectionString.length)];
-                    }
+                private String getConnectionString() {
+                    final ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                    return connectionStrings.get(rnd.nextInt(connectionStrings.size()));
+                }
 
-                }, ++delay % 500, MILLISECONDS));
-            }
-        } while (--maxNumberSessions > 0);
+            }, ++delay % 500, MILLISECONDS));
+        }
+        while (--maxNumberSessions > 0);
 
         try {
             int remainingWait = 900;
@@ -299,15 +288,8 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
      * @param sessionCreateRatePerSec
      * @param sessionDurationMs
      */
-    private void doStart(Set<InetSocketAddress> multiIpClientAddresses, long sessionCreateRatePerSec, long sessionDurationSec) {
+    private void doStart(long sessionCreateRatePerSec, long sessionDurationSec) {
 
-        final Set<InetSocketAddress> myClientAddresses = new HashSet<>();
-        if (multiIpClientAddresses == null || multiIpClientAddresses.isEmpty()) {
-            myClientAddresses.add(new InetSocketAddress(0));
-        }
-        else {
-            myClientAddresses.addAll(multiIpClientAddresses);
-        }
         LOG.trace("SessionCreator#doStart for '{}' sessions/second and '{}' sessionDurationMs", sessionCreateRatePerSec, sessionDurationSec);
 
         final long interval = 1000 / sessionCreateRatePerSec;
@@ -315,44 +297,40 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         boolean writtenSteadyStateFlagFile = false;
 
         do {
-            for (InetSocketAddress myAddress : myClientAddresses) {
-                try {
-                    startedSessions.incrementAndGet();
-                    Benchmarker.connectThreadPool.submit(new Runnable() {
+            try {
+                startedSessions.incrementAndGet();
+                Benchmarker.connectThreadPool.submit(new Runnable() {
 
-                        @Override
-                        public void run() {
+                    @Override
+                    public void run() {
 
-                            LOG.trace("Adding session");
-                            try {
-                                /* ASYNC session creation */
-                                sessionFactory
-                                    .localSocketAddress(myAddress)
-                                    .open(getConnectionString(), new OtherOpenCallback(sessionDurationSec));
-                                LOG.trace("Done submitting session open");
-                            }
-                            catch (Throwable t) {
-                                /* ASYNC session creation */
-                                connectionFailures.incrementAndGet();
-                                LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
-                                if (LOG.isDebugEnabled()) {
-                                    t.printStackTrace();
-                                }
+                        LOG.trace("Adding session");
+                        try {
+                            /* ASYNC session creation */
+                            sessionFactory
+                                .open(getConnectionString(), new OtherOpenCallback(sessionDurationSec));
+                            LOG.trace("Done submitting session open");
+                        }
+                        catch (Throwable t) {
+                            /* ASYNC session creation */
+                            connectionFailures.incrementAndGet();
+                            LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
+                            if (LOG.isDebugEnabled()) {
+                                t.printStackTrace();
                             }
                         }
+                    }
 
-                        private String getConnectionString() {
-                            final ThreadLocalRandom rnd = ThreadLocalRandom.current();
-                            return connectionString[rnd.nextInt(connectionString.length)];
-                        }
-                    });
-                }
-                catch (Exception e) {
-                    LOG.error("Exception caught when submitting session open ", e.getMessage());
-                    connectionFailures.incrementAndGet();
-                }
+                    private String getConnectionString() {
+                        final ThreadLocalRandom rnd = ThreadLocalRandom.current();
+                        return connectionStrings.get(rnd.nextInt(connectionStrings.size()));
+                    }
+                });
             }
-
+            catch (Exception e) {
+                LOG.error("Exception caught when submitting session open ", e.getMessage());
+                connectionFailures.incrementAndGet();
+            }
             if (connectedSessions.get() >= sessionCreateRatePerSec * sessionDurationSec && !writtenSteadyStateFlagFile) {
                 writeSteadyStateFlagFile();
                 writtenSteadyStateFlagFile = true;
