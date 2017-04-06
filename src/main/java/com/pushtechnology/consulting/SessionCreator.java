@@ -28,6 +28,9 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.pushtechnology.consulting.Benchmarker.CreatorState;
 import com.pushtechnology.diffusion.client.Diffusion;
 import com.pushtechnology.diffusion.client.callbacks.ErrorReason;
@@ -42,7 +45,6 @@ import com.pushtechnology.diffusion.client.session.Session.State;
 import com.pushtechnology.diffusion.client.session.SessionFactory;
 import com.pushtechnology.diffusion.client.session.reconnect.ReconnectionStrategy;
 import com.pushtechnology.diffusion.client.topics.TopicSelector;
-import com.pushtechnology.diffusion.client.topics.details.TopicDetails;
 import com.pushtechnology.diffusion.client.topics.details.TopicSpecification;
 import com.pushtechnology.diffusion.client.topics.details.TopicType;
 import com.pushtechnology.diffusion.client.types.UpdateContext;
@@ -51,6 +53,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
 /*package*/ final class SessionCreator {
 
+    private static final Logger LOG = LoggerFactory.getLogger(SessionCreator.class);
     private static volatile ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
 
     private SessionFactory sessionFactory;
@@ -80,11 +83,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     private final TopicType topicType;
 
     public SessionCreator(String connectionString, List<String> topicSelectors, TopicType topicType) {
-        Out.t("SessionCreator constructor...");
+        LOG.trace("SessionCreator constructor...");
 
         this.connectionString = connectionString.split("[,]");
         this.topicType = topicType;
-        Out.i("Creating sessions listening to topic selectors: '%s'", join(topicSelectors, ", "));
+        LOG.info("Creating sessions listening to topic selectors: '{}'", join(topicSelectors, ", "));
         for (String topicSelector : topicSelectors) {
             this.topicSelectors.add(Diffusion.topicSelectors().parse(topicSelector));
         }
@@ -120,15 +123,15 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
                 @Override
                 public void onError(Session session,SessionError err) {
-                    Out.e("SessionCreator#sessionFactory.onError : '%s'", err.getMessage());
+                    LOG.error("SessionCreator#sessionFactory.onError : '{}'", err.getMessage());
                 }
 
             }).listener(new Listener() {
 
                 @Override
                 public void onSessionStateChanged(Session session, State oldState,State newState) {
-                    Out.t("SessionCreator#sessionFactory.onSessionStateChanged");
-                    Out.t("Session state changed from '%s' to '%s'", oldState, newState);
+                    LOG.trace("SessionCreator#sessionFactory.onSessionStateChanged");
+                    LOG.trace("Session state changed from '{}' to '{}'", oldState, newState);
 
                     if (!oldState.isConnected() && newState.isConnected()) {
                         connectedSessions.incrementAndGet();
@@ -165,12 +168,12 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                         }
                     }
 
-                    Out.t("Done SessionCreator#sessionFactory.onSessionStateChanged");
+                    LOG.trace("Done SessionCreator#sessionFactory.onSessionStateChanged");
                 }
             });
 
         state = INITIALISED;
-        Out.t("Done SessionCreator constructor...");
+        LOG.trace("Done SessionCreator constructor...");
     }
 
     /**
@@ -185,7 +188,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     }
 
     public void start(final Set<InetSocketAddress> multiIpClientAddresses, int maxNumberSessions) {
-        Out.t("SessionCreator#start");
+        LOG.trace("SessionCreator#start");
         switch (state) {
         case INITIALISED:
             doStart(multiIpClientAddresses, maxNumberSessions);
@@ -194,11 +197,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         default:
             break;
         }
-        Out.t("Done SessionCreator#start");
+        LOG.trace("Done SessionCreator#start");
     }
 
     public void start(final Set<InetSocketAddress> multiIpClientAddresses, int sessionCreateRatePerSec,long sessionDurationMs) {
-        Out.t("SessionCreator#start");
+        LOG.trace("SessionCreator#start");
         switch (state) {
         case INITIALISED:
             doStart(multiIpClientAddresses, sessionCreateRatePerSec, sessionDurationMs);
@@ -207,7 +210,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         default:
             break;
         }
-        Out.t("Done SessionCreator#start");
+        LOG.trace("Done SessionCreator#start");
     }
 
     /**
@@ -221,7 +224,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         else {
             myClientAddresses.addAll(multiIpClientAddresses);
         }
-        Out.t("SessionCreator#doStart for '%d' sessions and '%d' clientAddress", maxNumberSessions, myClientAddresses.size());
+        LOG.trace("SessionCreator#doStart for '{}' sessions and '{}' clientAddress", maxNumberSessions, myClientAddresses.size());
         long delay = 0L;
         final CountDownLatch sessionsLatch = new CountDownLatch(maxNumberSessions);
         final List<CountDownLatch> subscribeCdlList = new ArrayList<>();
@@ -231,21 +234,21 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                 addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
                     @Override
                     public void run() {
-                        Out.t("Adding session");
+                        LOG.trace("Adding session");
                         try {
                             /* ASYNC session creation */
                             sessionFactory
                                 .localSocketAddress(myAddress)
                                 .open(getConnectionString(), new OpenCallback(sessionsLatch, subscribeCdlList));
                                 // FIXME: Non obvious update of `subscribeCdlList`
-                            Out.t("Done submitting session open");
+                            LOG.trace("Done submitting session open");
                         }
                         catch (Throwable t) {
                             /* ASYNC session creation */
                             connectionFailures.incrementAndGet();
                             sessionsLatch.countDown();
-                            Out.e("Exception caught trying to connect: '%s'", t.getMessage());
-                            if (Out.doLog(Out.OutLevel.DEBUG)) {
+                            LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
+                            if(LOG.isDebugEnabled()) {
                                 t.printStackTrace();
                             }
                         }
@@ -278,16 +281,15 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             }
         }
         catch (InterruptedException e) {
-            Out.e("Exception caught waiting for sessions to open: '%s'",
-                e.getMessage());
-            if (Out.doLog(Out.OutLevel.DEBUG)) {
+            LOG.error("Exception caught waiting for sessions to open: '{}'", e.getMessage());
+            if (LOG.isDebugEnabled()) {
                 e.printStackTrace();
             }
         }
         // all connected/failed but not processed all the subscriptions yet.
         writeSteadyStateFlagFile();
 
-        Out.t("Done SessionCreator#doStart");
+        LOG.trace("Done SessionCreator#doStart");
     }
 
     /**
@@ -306,7 +308,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         else {
             myClientAddresses.addAll(multiIpClientAddresses);
         }
-        Out.t("SessionCreator#doStart for '%d' sessions/second and '%d' sessionDurationMs", sessionCreateRatePerSec, sessionDurationSec);
+        LOG.trace("SessionCreator#doStart for '{}' sessions/second and '{}' sessionDurationMs", sessionCreateRatePerSec, sessionDurationSec);
 
         final long interval = 1000 / sessionCreateRatePerSec;
         long now = System.currentTimeMillis();
@@ -321,19 +323,19 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                         @Override
                         public void run() {
 
-                            Out.t("Adding session");
+                            LOG.trace("Adding session");
                             try {
                                 /* ASYNC session creation */
                                 sessionFactory
                                     .localSocketAddress(myAddress)
                                     .open(getConnectionString(), new OtherOpenCallback(sessionDurationSec));
-                                Out.t("Done submitting session open");
+                                LOG.trace("Done submitting session open");
                             }
                             catch (Throwable t) {
                                 /* ASYNC session creation */
                                 connectionFailures.incrementAndGet();
-                                Out.e("Exception caught trying to connect: '%s'", t.getMessage());
-                                if (Out.doLog(Out.OutLevel.DEBUG)) {
+                                LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
+                                if (LOG.isDebugEnabled()) {
                                     t.printStackTrace();
                                 }
                             }
@@ -346,7 +348,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                     });
                 }
                 catch (Exception e) {
-                    Out.e("Exception caught when submitting session open ", e.getMessage());
+                    LOG.error("Exception caught when submitting session open ", e.getMessage());
                     connectionFailures.incrementAndGet();
                 }
             }
@@ -361,8 +363,8 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         } while (true);
     }
 
-    private void subscribe(List<TopicSelector> topicSelectors, Session session, CompletionCallback completionCallback) {
-        for (TopicSelector sel : topicSelectors) {
+    private void subscribe(List<TopicSelector> selectors, Session session, CompletionCallback completionCallback) {
+        for (TopicSelector sel : selectors) {
             final Topics topicFeature = session.feature(Topics.class);
             if (topicType == SINGLE_VALUE) {
                 topicFeature.addTopicStream(sel, new SingleValueTopicStream());
@@ -379,7 +381,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     }
 
     private void updateCounters(String topic,int length) {
-        Out.d("onTopicUpdate for topic '%s'", topic);
+        LOG.debug("onTopicUpdate for topic '{}'", topic);
         messageCount.incrementAndGet();
         messageByteCount.addAndGet(length);
     }
@@ -394,18 +396,18 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         final File file = new File("steady_state");
         try {
             file.createNewFile();
-            Out.i("Reached steady state (Wrote steady state file)");
+            LOG.info("Reached steady state (Wrote steady state file)");
         }
         catch (IOException e) {
-            Out.e("Exception caught in writeSteadyStateFlagFile: '%s'", e.getMessage());
-            if (Out.doLog(Out.OutLevel.DEBUG)) {
+            LOG.error("Exception caught in writeSteadyStateFlagFile: {}'", e.getMessage());
+            if (LOG.isDebugEnabled()) {
                 e.printStackTrace();
             }
         }
     }
 
     public void stop() {
-        Out.t("SessionCreator#stop");
+        LOG.trace("SessionCreator#stop");
         switch (state) {
         case STARTED:
             for (ScheduledFuture<?> tmpFuture : addSessions) {
@@ -418,11 +420,11 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         default:
             break;
         }
-        Out.t("Done SessionCreator#stop");
+        LOG.trace("Done SessionCreator#stop");
     }
 
     public void shutdown() {
-        Out.t("SessionCreator#shutdown");
+        LOG.trace("SessionCreator#shutdown");
         switch (state) {
         case STARTED:
             stop();
@@ -443,7 +445,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         default:
             break;
         }
-        Out.t("Done SessionCreator#shutdown");
+        LOG.trace("Done SessionCreator#shutdown");
     }
 
     /**
@@ -514,7 +516,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
         @Override
         public void onError(ErrorReason errorReason) {
-            Out.e("Connection failed: '%s'", errorReason);
+            LOG.error("Connection failed: '{}'", errorReason);
             connectionFailures.incrementAndGet();
         }
 
@@ -523,13 +525,13 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             subscribe(topicSelectors, session, new CompletionCallback() {
                 @Override
                 public void onDiscard() {
-                    Out.t("SessionCreator#topics.onDiscard");
+                    LOG.trace("SessionCreator#topics.onDiscard");
                 }
 
                 @Override
                 public void
                     onComplete() {
-                    Out.t("SessionCreator#topics.onComplete");
+                    LOG.trace("SessionCreator#topics.onComplete");
                     if (selectorsCount.decrementAndGet() <= 0) {
                         setupDisconnectPhase(session, sessionDurationSec);
                     }
@@ -539,7 +541,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             synchronized (sessionSetLock) {
                 sessions.add(session);
             }
-            Out.t("Session open complete");
+            LOG.trace("Session open complete");
         }
     }
 
@@ -554,7 +556,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
         @Override
         public void onError(ErrorReason errorReason) {
-            Out.e("Connection failed: '%s'", errorReason);
+            LOG.error("Connection failed: '{}'", errorReason);
             connectionFailures.incrementAndGet();
             sessionsLatch.countDown();
         }
@@ -565,13 +567,13 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             subscribe(topicSelectors, session, new CompletionCallback() {
                 @Override
                 public void onDiscard() {
-                    Out.t("SessionCreator#topics.onDiscard");
+                    LOG.trace("SessionCreator#topics.onDiscard");
                     cdl.countDown();
                 }
 
                 @Override
                 public void onComplete() {
-                    Out.t("SessionCreator#topics.onComplete");
+                    LOG.trace("SessionCreator#topics.onComplete");
                     cdl.countDown();
                 }
             });
@@ -579,7 +581,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             synchronized (sessionSetLock) {
                 sessions.add(session);
             }
-            Out.t("Session open complete");
+            LOG.trace("Session open complete");
             sessionsLatch.countDown();
             subscribeCdlList.add(cdl);
         }
@@ -606,18 +608,13 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         @Override
         public void onError(ErrorReason reason) {
             if (!ErrorReason.SESSION_CLOSED.equals(reason)) {
-                Out.e("TopicStream::OnError '%s'", reason);
+                LOG.error("TopicStream::OnError '{}'", reason);
             }
         }
 
         @Override
         public void onTopicUpdate(String topic,Content content, UpdateContext context) {
             updateCounters(topic, content.length());
-        }
-
-        @Override
-        public void onSubscription(String topic,TopicDetails details) {
-            Out.d("Subscribed to topic '%s'", topic);
         }
     }
 

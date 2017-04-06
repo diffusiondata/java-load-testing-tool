@@ -18,6 +18,8 @@ import java.util.concurrent.ThreadLocalRandom;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.math.NumberUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.pushtechnology.consulting.Benchmarker.CreatorState;
 import com.pushtechnology.diffusion.client.Diffusion;
@@ -48,6 +50,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
 /*package*/ final class Publisher {
+    private static final Logger LOG = LoggerFactory.getLogger(Publisher.class);
 
     private final String connectionString;
     private final String rootTopic;
@@ -66,7 +69,7 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
     public Publisher(String connectionString,String username,String password,
         final List<String> topics,TopicType topicType) {
-        Out.t("Publisher constructor");
+        LOG.trace("Publisher constructor");
 
         this.connectionString = connectionString;
         this.rootTopic = topics.get(0).split("/")[0];
@@ -83,128 +86,118 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
                 @Override
                 public void onError(Session session, SessionError err) {
-                    Out.e("SessionCreator#sessionFactory.onError : '%s'", err.getMessage());
+                    LOG.error("SessionCreator#sessionFactory.onError : '{}'", err.getMessage());
                 }
 
             }).listener(new Listener() {
 
                 @Override
                 public void onSessionStateChanged(Session theSession, State oldState, State newState) {
-                    Out.t("Publisher#sessionFactory.onSessionStateChanged");
-                    Out.d("Session state changed from '%s' to '%s'", oldState, newState);
+                    LOG.trace("Publisher#sessionFactory.onSessionStateChanged");
+                    LOG.debug("Session state changed from '{}' to '{}'", oldState, newState);
                     switch (newState) {
                     case CONNECTED_ACTIVE:
-                        Out.d("Session state is active registeringTopicControlAndSource...");
+                        LOG.debug("Session state is active registeringTopicControlAndSource...");
                         session = theSession;
                         registerTopicControlAndSource();
-                        Out.d("Subscribing to topics...");
+                        LOG.debug("Subscribing to topics...");
                         subscribeToTopics(topics);
                         break;
                     default:
                         break;
                     }
-                    Out.t("Done Publisher#sessionFactory.onSessionStateChanged");
+                    LOG.trace("Done Publisher#sessionFactory.onSessionStateChanged");
                 }
             });
 
         state = INITIALISED;
 
-        Out.t("Done Publisher constructor");
+        LOG.trace("Done Publisher constructor");
     }
 
     void stopAllFeeds() {
-        Out.t("Publisher#stopAllFeeds");
-        Out.d("Stopping all feeds...");
+        LOG.trace("Publisher#stopAllFeeds");
+        LOG.debug("Stopping all feeds...");
         for (ScheduledFuture<?> future : topicUpdatersByTopic.values()) {
             future.cancel(false);
         }
-        Out.t("Done Publisher#stopAllFeeds");
+        LOG.trace("Done Publisher#stopAllFeeds");
     }
 
     void registerTopicControlAndSource() {
-        Out.t("Publisher#registerTopicControlAndSource");
+        LOG.trace("Publisher#registerTopicControlAndSource");
 
-        Out.d("Setting up topic control...");
+        LOG.debug("Setting up topic control...");
         this.topicControl = this.session.feature(TopicControl.class);
         this.topicControl.addMissingTopicHandler(rootTopic,
             new MissingTopicHandler() {
 
                 @Override
                 public void onClose(String topicPath) {
-                    Out.t("MissingTopicHandler#OnClose for topic '%s'", topicPath);
+                    LOG.trace("MissingTopicHandler#OnClose for topic '{}'", topicPath);
                 }
 
                 @Override
                 public void onActive(String topicPath,
                     RegisteredHandler registeredHandler) {
-                    Out.i("MissingTopicHandler active for topic '%s'", topicPath);
+                    LOG.info("MissingTopicHandler active for topic '{}'", topicPath);
                 }
 
                 @Override
                 public void
                     onMissingTopic(MissingTopicNotification notification) {
-                    Out.t("Publisher#missingTopicHandler.OnMissingTopic");
+                    LOG.trace("Publisher#missingTopicHandler.OnMissingTopic");
                     String topicPath = notification.getTopicPath();
-                    Out.i("OnMissingTopic called for '%s'", topicPath);
+                    LOG.info("OnMissingTopic called for '{}'", topicPath);
                     createTopic(topicPath, topicType);
                     notification.proceed();
-                    Out.t("Done Publisher#missingTopicHandler.OnMissingTopic");
+                    LOG.trace("Done Publisher#missingTopicHandler.OnMissingTopic");
                 }
             });
 
-        Out.d("Setting up topic update control (source)...");
+        LOG.debug("Setting up topic update control (source)...");
         this.topicUpdateControl = this.session.feature(TopicUpdateControl.class);
         this.topicUpdateControl.registerUpdateSource(rootTopic, new UpdateSource.Default() {
 
                 @Override
                 public void onClose(String topicPath) {
-                    Out.t("Publisher#TopicSource.onClosed");
+                    LOG.trace("Publisher#TopicSource.onClosed");
                     Publisher.this.updater = null;
                     shutdown();
-                    Out.t("Done Publisher#TopicSource.onClosed");
-                }
-
-                @Override
-                public void onError(String topicPath,ErrorReason reason) {
-                    Out.e("Publisher#TopicSource.onError for topic '%s' cause: '%s'", topicPath, reason);
+                    LOG.trace("Done Publisher#TopicSource.onClosed");
                 }
 
                 @Override
                 public void onActive(String topicPath, Updater updater) {
-                    Out.t("Publisher#TopicSource.onActive");
+                    LOG.trace("Publisher#TopicSource.onActive");
                     onStandby = false;
                     Publisher.this.updater = updater;
 
                     for (String topic : topicStandbyList) {
                         startFeed(topic);
                     }
-                    Out.t("Done Publisher#TopicSource.onActive");
+                    LOG.trace("Done Publisher#TopicSource.onActive");
                 }
 
                 @Override
                 public void onStandby(String topicPath) {
-                    Out.t("Publisher#TopicSource.onStandby");
+                    LOG.trace("Publisher#TopicSource.onStandby");
                     onStandby = true;
                     stopAllFeeds();
-                    Out.t("Done Publisher#TopicSource.onStandby");
+                    LOG.trace("Done Publisher#TopicSource.onStandby");
                 }
             });
 
-        Out.t("Done Publisher#registerTopicControlAndSource");
+        LOG.trace("Done Publisher#registerTopicControlAndSource");
     }
 
     void subscribeToTopics(List<String> topics) {
-        Out.d("Subscribing to topics: '%s'", ArrayUtils.toString(topics));
+        LOG.debug("Subscribing to topics: '{}'", ArrayUtils.toString(topics));
         for (String topic : topics) {
             final String sel = ">" + topic;
-            Out.d("Subscribing to topic '%s'", sel);
+            LOG.debug("Subscribing to topic '{}'", sel);
             final Topics topicFeature = session.feature(Topics.class);
             topicFeature.addTopicStream(sel, new Topics.TopicStream.Default() {
-
-                @Override
-                public void onError(ErrorReason reason) {
-                    Out.e("Publisher#TopicStream.onError : '%s'", reason);
-                }
 
                 @Override
                 public void onSubscription(String topicPath, TopicDetails details) {
@@ -213,57 +206,46 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
             });
 
-            topicFeature.subscribe(sel, new CompletionCallback() {
-
-                @Override
-                public void onDiscard() {
-                    Out.t("Publisher#topics.onDiscard");
-                }
-
-                @Override
-                public void onComplete() {
-                    Out.t("Publisher#topics.onComplete");
-                }
-            });
+            topicFeature.subscribe(sel, new CompletionCallback.Default(){});
         }
     }
 
     void createTopic(String topicPath, TopicType topicType) {
-        Out.t("Publisher#createTopic");
-        Out.d("Creating topic '%s' of type '%s'", topicPath, topicType);
+        LOG.trace("Publisher#createTopic");
+        LOG.debug("Creating topic '{}' of type '{}'", topicPath, topicType);
         this.topicControl.addTopic(topicPath, topicType, new AddCallback() {
 
             @Override
             public void onDiscard() {
-                Out.e("Publisher#TopicControlAddCallbackImpl.onDiscard() :: Notification that a call context was closed prematurely, typically due to a timeout or the session being closed.");
+                LOG.error("Publisher#TopicControlAddCallbackImpl.onDiscard() :: Notification that a call context was closed prematurely, typically due to a timeout or the session being closed.");
             }
 
             @Override
             public void onTopicAdded(String topicPath) {
-                Out.i("Topic '%s' added.", topicPath);
+                LOG.info("Topic '{}' added.", topicPath);
                 startFeed(topicPath);
             }
 
             @Override
             public void onTopicAddFailed(String topicPath,
                 TopicAddFailReason reason) {
-                Out.t("Publisher#TopicControlAddCallback.onTopicAddFailed");
-                Out.d("topicAddFailed path: '%s', reason: '%s'", topicPath,
+                LOG.trace("Publisher#TopicControlAddCallback.onTopicAddFailed");
+                LOG.debug("topicAddFailed path: '{}', reason: '{}'", topicPath,
                     reason);
                 switch (reason) {
                 case EXISTS:
                     startFeed(topicPath);
                     break;
                 default:
-                    Out.e("Adding topic: '%s' failed for reason: '%s'",
+                    LOG.error("Adding topic: '{}' failed for reason: '{}'",
                         topicPath, reason);
                     break;
                 }
-                Out.t(
+                LOG.trace(
                     "Done Publisher#TopicControlAddCallback.onTopicAddFailed");
             }
         });
-        Out.t("Done Publisher#createTopic");
+        LOG.trace("Done Publisher#createTopic");
     }
 
     /**
@@ -273,66 +255,66 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
      * @param topicPath
      */
     void startFeed(final String topicPath) {
-        Out.t("Publisher#startFeed for '%s'", topicPath);
+        LOG.trace("Publisher#startFeed for '{}'", topicPath);
         if (onStandby) {
-            Out.d("Publisher#startFeed : OnStandby, adding to list and waiting...");
+            LOG.debug("Publisher#startFeed : OnStandby, adding to list and waiting...");
             topicStandbyList.add(topicPath);
             return;
         }
-        Out.d("Trying to start feed for: '%s'", topicPath);
+        LOG.debug("Trying to start feed for: '{}'", topicPath);
         final String[] paths = topicPath.split("/");
         final int expectedLength = 4;
         if (paths.length == 4) {
-            Out.d("Found topicPath '%s' elements: '%s', '%s', '%s'", topicPath, paths[0] + "/" + paths[1], paths[2], paths[3]);
+            LOG.debug("Found topicPath '{}' elements: '{}', '{}', '{}'", topicPath, paths[0] + "/" + paths[1], paths[2], paths[3]);
             final int messageSizeInBytes = NumberUtils.toInt(paths[2], -1);
             randomString = new RandomString(messageSizeInBytes);
             final int messagesPerSecond = NumberUtils.toInt(paths[3], -1);
             if (messageSizeInBytes > 0 && messagesPerSecond > 0 && messagesPerSecond <= 1000) {
-                Out.d("Using messageSizeInBytes: '%d' and messagesPerSecond: '%d'", messageSizeInBytes, messagesPerSecond);
+                LOG.debug("Using messageSizeInBytes: '{}' and messagesPerSecond: '{}'", messageSizeInBytes, messagesPerSecond);
                 ScheduledFuture<?> tmpFuture;
                 if (topicUpdatersByTopic.containsKey(topicPath)) {
-                    Out.t("Service already found, trying to pull by topicPath '%s'", topicPath);
+                    LOG.trace("Service already found, trying to pull by topicPath '{}'", topicPath);
                     tmpFuture = topicUpdatersByTopic.get(topicPath);
                     if (!tmpFuture.isDone() && !tmpFuture.isCancelled()) {
-                        Out.d("Service is already running for topic '%s'", topicPath);
+                        LOG.debug("Service is already running for topic '{}'", topicPath);
                         return;
                     }
                 }
                 else {
-                    Out.d("Service not found, creating for '%s'", topicPath);
+                    LOG.debug("Service not found, creating for '{}'", topicPath);
                 }
                 final Long scheduleIntervalInMillis = new Long(1000 / messagesPerSecond);
-                Out.i("Updating topic path '%s', every '%d' ms", topicPath, scheduleIntervalInMillis);
+                LOG.info("Updating topic path {}', every '{}' ms", topicPath, scheduleIntervalInMillis);
                 tmpFuture = Benchmarker.globalThreadPool.scheduleAtFixedRate(new Runnable() {
 
                         @Override
                         public void run() {
-                            Out.d("updater.update() for topic path: '%s' %s", topicPath, messageSizeInBytes);
+                            LOG.debug("updater.update() for topic path: '{}' {}", topicPath, messageSizeInBytes);
                             update(topicPath, new UpdateCallback() {
 
                                 @Override
                                 public void onError(ErrorReason error) {
-                                    Out.e("Error : '%s'", error);
+                                    LOG.error("Error : '{}'", error);
                                 }
 
                                 @Override
                                 public void onSuccess() {
-                                    Out.d("Topic updated");
+                                    LOG.debug("Topic updated");
                                 }
                             }, false, messageSizeInBytes);
                         }
                     }, 0L, scheduleIntervalInMillis, MILLISECONDS);
-                Out.d("Started updater for '%s'", topicPath);
+                LOG.debug("Started updater for '{}'", topicPath);
                 topicUpdatersByTopic.put(topicPath, tmpFuture);
             }
             else {
-                Out.e("Could not parse topicPath: '%s', found messageSizeInBytes: '%d' and messagesPerSecond: '%d'", topicPath, messageSizeInBytes, messagesPerSecond);
+                LOG.error("Could not parse topicPath: '{}', found messageSizeInBytes: '{}' and messagesPerSecond: {}'", topicPath, messageSizeInBytes, messagesPerSecond);
             }
         }
         else {
-            Out.e("Could not parse topicPath '%s', length was : %d, expected " + expectedLength, topicPath, paths.length);
+            LOG.error("Could not parse topicPath '{}', length was : {}, expected {}", expectedLength, topicPath, paths.length);
         }
-        Out.t("Done Publisher#startFeed for '%s'", topicPath);
+        LOG.trace("Done Publisher#startFeed for '{}'", topicPath);
     }
 
     private void update(final String selector,UpdateCallback cb,
@@ -363,7 +345,7 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
         }
         catch (Exception e) {
             e.printStackTrace();
-            Out.e("Error in publisher loop " + e.getMessage(), e);
+            LOG.error("Error in publisher loop " + e.getMessage(), e);
         }
     }
 
@@ -374,17 +356,17 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
     }
 
     void stopFeed(String topicPath) {
-        Out.t("Publisher#stopFeed for '%s'", topicPath);
-        Out.d("Trying to stop feed for: '%s'", topicPath);
+        LOG.trace("Publisher#stopFeed for '{}'", topicPath);
+        LOG.debug("Trying to stop feed for: '{}'", topicPath);
         if (topicUpdatersByTopic.containsKey(topicPath)) {
-            Out.i("Stopping topic feed for '%s'", topicPath);
+            LOG.info("Stopping topic feed for '{}'", topicPath);
             topicUpdatersByTopic.get(topicPath).cancel(false);
         }
-        Out.t("Done Publisher#stopFeed for '%s'", topicPath);
+        LOG.trace("Done Publisher#stopFeed for '{}'", topicPath);
     }
 
     public void start() {
-        Out.t("Publisher#start");
+        LOG.trace("Publisher#start");
         switch (state) {
         case INITIALISED:
             doStart();
@@ -393,17 +375,17 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
         default:
             break;
         }
-        Out.t("Done Publisher#start");
+        LOG.trace("Done Publisher#start");
     }
 
     private void doStart() {
-        Out.t("Publisher#doStart");
+        LOG.trace("Publisher#doStart");
         this.session = this.sessionFactory.open(this.connectionString);
-        Out.t("Done Publisher#doStart");
+        LOG.trace("Done Publisher#doStart");
     }
 
     public void shutdown() {
-        Out.t("Publisher#shutdown");
+        LOG.trace("Publisher#shutdown");
         switch (state) {
         case STARTED:
             stopAllFeeds();
@@ -412,7 +394,7 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
         default:
             break;
         }
-        Out.t("Done Publisher#shutdown");
+        LOG.trace("Done Publisher#shutdown");
     }
 
     /**

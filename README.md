@@ -27,6 +27,8 @@ Placing a finite number of subscribing sessions
 
     java -jar target/benchmark-0.10.0-script-SNAPSHOT.jar -sessions ${server-url} 2 -myTopics ${topics}
 
+For example:
+
     java -jar target/benchmark-0.10.0-script-SNAPSHOT.jar -sessions ws://localhost:8080 2 -myTopics foo/bar/100/1 foo/bar/100/2
     
 Frequently placing and closing a given number of sessions a second
