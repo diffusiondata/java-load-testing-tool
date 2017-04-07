@@ -35,3 +35,5 @@ For example:
 Frequently placing and closing (or 'churning') a given number of sessions a second:
 
     java -jar target/benchmark-0.10.0-script-SNAPSHOT.jar -myTopics foo/bar/100/1 /foo/bar/100/2 -sessionRate ws://localhost:8080 1 500 
+
+[![Build Status](https://travis-ci.org/pushtechnology/java-load-testing-tool.svg?branch=master)](https://travis-ci.org/pushtechnology/java-load-testing-tool)

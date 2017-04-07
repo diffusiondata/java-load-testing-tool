@@ -5,7 +5,7 @@
     <groupId>com.pushtechnology.consulting</groupId>
     <artifactId>java-benchmark-suite</artifactId>
     <name>Java Benchmark Suite</name>
-    <version>0.10.0-script-SNAPSHOT</version>
+    <version>1.0.0</version>
     <packaging>jar</packaging>
 
 
