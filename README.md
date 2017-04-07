@@ -10,7 +10,9 @@ Requirements
 * Diffusion v5.9
 * Internet access
 
-    mvn clean install
+```
+mvn clean install
+```
 
 ## As a publisher
 
