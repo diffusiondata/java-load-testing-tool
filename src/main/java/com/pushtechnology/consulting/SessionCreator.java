@@ -1,3 +1,18 @@
+/*******************************************************************************
+ * Copyright (C) 2017 Push Technology Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *******************************************************************************/
+
 package com.pushtechnology.consulting;
 
 import static com.pushtechnology.consulting.Benchmarker.CreatorState.INITIALISED;
@@ -51,15 +66,19 @@ import com.pushtechnology.diffusion.client.types.UpdateContext;
 import com.pushtechnology.diffusion.datatype.Bytes;
 import com.pushtechnology.diffusion.datatype.json.JSON;
 
-/*package*/ final class SessionCreator {
+/**
+ * Create topic subscribers.
+ *
+ * @author Push Technology Consulting.
+ */
+/* package */ final class SessionCreator {
 
     private static final Logger LOG = LoggerFactory.getLogger(SessionCreator.class);
-    private static volatile ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
 
-    private SessionFactory sessionFactory;
+    private final SessionFactory sessionFactory;
     private final List<String> connectionStrings;
-    private List<TopicSelector> topicSelectors = new ArrayList<>();
-    private List<ScheduledFuture<?>> addSessions = new ArrayList<>();
+    private final List<TopicSelector> topicSelectors = new ArrayList<>();
+    private final List<ScheduledFuture<?>> addSessions = new ArrayList<>();
     private final Object sessionSetLock = new Object();
     private final Set<Session> sessions = new HashSet<>();
 
@@ -80,7 +99,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     private CreatorState state;
     private final TopicType topicType;
 
-    public SessionCreator(String connectionString, List<String> topicSelectors, TopicType topicType) {
+    SessionCreator(String connectionString, List<String> topicSelectors, TopicType topicType) {
         LOG.trace("SessionCreator constructor...");
 
         this.connectionStrings = asList(connectionString.split("[,]"));
@@ -90,16 +109,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             this.topicSelectors.add(Diffusion.topicSelectors().parse(topicSelector));
         }
 
-        if (Integer.getInteger("bench.input.buffer.size", 0) > 0) {
-            this.sessionFactory = Diffusion.sessions()
-                .inputBufferSize(getInteger("bench.input.buffer.size"));
-        }
-        if (Integer.getInteger("bench.output.buffer.size", 0) > 0) {
-            this.sessionFactory = Diffusion.sessions()
-                .outputBufferSize(getInteger("bench.output.buffer.size"));
-        }
-
-        this.sessionFactory = Diffusion.sessions()
+        SessionFactory factory = Diffusion.sessions()
             .connectionTimeout(60 * 1000)
             .recoveryBufferSize(8000)
             .reconnectionStrategy(new ReconnectionStrategy() {
@@ -120,14 +130,14 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             .errorHandler(new ErrorHandler() {
 
                 @Override
-                public void onError(Session session,SessionError err) {
+                public void onError(Session session, SessionError err) {
                     LOG.error("SessionCreator#sessionFactory.onError : '{}'", err.getMessage());
                 }
 
             }).listener(new Listener() {
 
                 @Override
-                public void onSessionStateChanged(Session session, State oldState,State newState) {
+                public void onSessionStateChanged(Session session, State oldState, State newState) {
                     LOG.trace("SessionCreator#sessionFactory.onSessionStateChanged");
                     LOG.trace("Session state changed from '{}' to '{}'", oldState, newState);
 
@@ -157,9 +167,12 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                         closedSessions.incrementAndGet();
 
                         synchronized (sessionSetLock) {
-                            // Assumes sessions are only closed when shutting down
-                            // The state listener is called during the close call
-                            // Do not modify the sessions object when iterating over it
+                            // Assumes sessions are only closed when shutting
+                            // down
+                            // The state listener is called during the close
+                            // call
+                            // Do not modify the sessions object when iterating
+                            // over it
                             if (newState != State.CLOSED_BY_CLIENT) {
                                 sessions.remove(session);
                             }
@@ -169,6 +182,15 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                     LOG.trace("Done SessionCreator#sessionFactory.onSessionStateChanged");
                 }
             });
+
+        if (Integer.getInteger("bench.input.buffer.size", 0) > 0) {
+            factory = factory.inputBufferSize(getInteger("bench.input.buffer.size"));
+        }
+
+        if (Integer.getInteger("bench.output.buffer.size", 0) > 0) {
+            factory = factory.outputBufferSize(getInteger("bench.output.buffer.size"));
+        }
+        this.sessionFactory = factory;
 
         state = INITIALISED;
         LOG.trace("Done SessionCreator constructor...");
@@ -198,7 +220,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         LOG.trace("Done SessionCreator#start");
     }
 
-    public void start(int sessionCreateRatePerSec,long sessionDurationMs) {
+    public void start(int sessionCreateRatePerSec, long sessionDurationMs) {
         LOG.trace("SessionCreator#start");
         switch (state) {
         case INITIALISED:
@@ -219,27 +241,23 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         LOG.trace("SessionCreator#doStart for '{}' sessions ", maxNumberSessions);
         long delay = 0L;
         final CountDownLatch sessionsLatch = new CountDownLatch(maxNumberSessions);
-        final List<CountDownLatch> subscribeCdlList = new ArrayList<>();
+        final CountDownLatch subscriptionLatch = new CountDownLatch(maxNumberSessions * topicSelectors.size());
 
-        do {
+        for (int i = 0; i < maxNumberSessions; i++) {
             addSessions.add(Benchmarker.globalThreadPool.schedule(new Runnable() {
                 @Override
                 public void run() {
                     LOG.trace("Adding session");
                     try {
                         /* ASYNC session creation */
-                        sessionFactory.open(getConnectionString(), new OpenCallback(sessionsLatch, subscribeCdlList));
-                        // FIXME: Non obvious update of `subscribeCdlList`
+                        sessionFactory.open(getConnectionString(), new OpenCallback(sessionsLatch, subscriptionLatch));
                         LOG.trace("Done submitting session open");
                     }
-                    catch (Throwable t) {
+                    catch (Exception e) {
                         /* ASYNC session creation */
                         connectionFailures.incrementAndGet();
                         sessionsLatch.countDown();
-                        LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
-                        if (LOG.isDebugEnabled()) {
-                            t.printStackTrace();
-                        }
+                        LOG.error("Exception caught trying to connect", e);
                     }
                 }
 
@@ -250,30 +268,17 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
             }, ++delay % 500, MILLISECONDS));
         }
-        while (--maxNumberSessions > 0);
 
         try {
-            int remainingWait = 900;
-            // ensure all sessions submitted
+            final int remainingWait = 15 * 60;
+            // Ensure all sessions connected
             sessionsLatch.await(remainingWait, SECONDS);
-            // now can countdown the subscriptions
-            for (CountDownLatch cdl : subscribeCdlList) {
-                long start = System.currentTimeMillis();
-                cdl.await(remainingWait, SECONDS);
-                long elapsed = (System.currentTimeMillis() - start) / 1000;
-                if (remainingWait > elapsed) {
-                    remainingWait -= elapsed;
-                }
-                else {
-                    remainingWait = 0;
-                }
-            }
+
+            // Countdown the subscriptions
+            subscriptionLatch.await(remainingWait, SECONDS);
         }
         catch (InterruptedException e) {
-            LOG.error("Exception caught waiting for sessions to open: '{}'", e.getMessage());
-            if (LOG.isDebugEnabled()) {
-                e.printStackTrace();
-            }
+            LOG.error("Exception caught waiting for sessions to open: '{}'", e);
         }
         // all connected/failed but not processed all the subscriptions yet.
         writeSteadyStateFlagFile();
@@ -282,7 +287,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     }
 
     /**
-     * Session churn
+     * Session churn.
      *
      * @param multiIpClientAddresses
      * @param sessionCreateRatePerSec
@@ -294,7 +299,6 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
         final long interval = 1000 / sessionCreateRatePerSec;
         long now = System.currentTimeMillis();
-        boolean writtenSteadyStateFlagFile = false;
 
         do {
             try {
@@ -307,17 +311,15 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                         LOG.trace("Adding session");
                         try {
                             /* ASYNC session creation */
-                            sessionFactory
-                                .open(getConnectionString(), new OtherOpenCallback(sessionDurationSec));
+                            sessionFactory.open(
+                                getConnectionString(),
+                                new OpenChurningSessionCallback(sessionDurationSec));
                             LOG.trace("Done submitting session open");
                         }
-                        catch (Throwable t) {
+                        catch (Exception e) {
                             /* ASYNC session creation */
                             connectionFailures.incrementAndGet();
-                            LOG.error("Exception caught trying to connect: '{}'", t.getMessage());
-                            if (LOG.isDebugEnabled()) {
-                                t.printStackTrace();
-                            }
+                            LOG.error("Exception caught trying to connect:", e);
                         }
                     }
 
@@ -331,14 +333,14 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
                 LOG.error("Exception caught when submitting session open ", e.getMessage());
                 connectionFailures.incrementAndGet();
             }
-            if (connectedSessions.get() >= sessionCreateRatePerSec * sessionDurationSec && !writtenSteadyStateFlagFile) {
+            if (connectedSessions.get() >= sessionCreateRatePerSec * sessionDurationSec) {
                 writeSteadyStateFlagFile();
-                writtenSteadyStateFlagFile = true;
             }
 
             now = now + interval;
             LockSupport.parkUntil(now);
-        } while (true);
+        }
+        while (true);
     }
 
     private void subscribe(List<TopicSelector> selectors, Session session, CompletionCallback completionCallback) {
@@ -358,16 +360,10 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         }
     }
 
-    private void updateCounters(String topic,int length) {
+    private void updateCounters(String topic, int length) {
         LOG.debug("onTopicUpdate for topic '{}'", topic);
         messageCount.incrementAndGet();
         messageByteCount.addAndGet(length);
-    }
-
-    protected void setupDisconnectPhase(Session session,long sessionDuration) {
-        if (sessionDuration > 0) {
-            closeExecutor.schedule(new SessionCloseTask(session), sessionDuration, SECONDS);
-        }
     }
 
     private void writeSteadyStateFlagFile() {
@@ -377,10 +373,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             LOG.info("Reached steady state (Wrote steady state file)");
         }
         catch (IOException e) {
-            LOG.error("Exception caught in writeSteadyStateFlagFile: {}'", e.getMessage());
-            if (LOG.isDebugEnabled()) {
-                e.printStackTrace();
-            }
+            LOG.error("Exception caught in writeSteadyStateFlagFile: {}'", e);
         }
     }
 
@@ -406,6 +399,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         switch (state) {
         case STARTED:
             stop();
+            /* fall through */
         case STOPPED:
             synchronized (sessionSetLock) {
                 for (Session s : this.sessions) {
@@ -429,66 +423,66 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
     /**
      * @return the connectedSessions
      */
-    AtomicInteger getConnectedSessions() {
+    /* package */ AtomicInteger getConnectedSessions() {
         return connectedSessions;
     }
 
     /**
      * @return the startedSessions
      */
-    AtomicInteger getStartedSessions() {
+    /* package */ AtomicInteger getStartedSessions() {
         return startedSessions;
     }
 
     /**
      * @return the recoveringSessions
      */
-    AtomicInteger getRecoveringSessions() {
+    /* package */ AtomicInteger getRecoveringSessions() {
         return recoveringSessions;
     }
 
     /**
      * @return the closedSessions
      */
-    AtomicInteger getClosedSessions() {
+    /* package */ AtomicInteger getClosedSessions() {
         return closedSessions;
     }
 
     /**
      * @return the endedSessions
      */
-    AtomicInteger getEndedSessions() {
+    /* package */ AtomicInteger getEndedSessions() {
         return endedSessions;
     }
 
     /**
      * @return the connectionFailures
      */
-    AtomicInteger getConnectionFailures() {
+    /* package */ AtomicInteger getConnectionFailures() {
         return connectionFailures;
     }
 
     /**
      * @return the messageCount
      */
-    AtomicInteger getMessageCount() {
+    /* package */ AtomicInteger getMessageCount() {
         return messageCount;
     }
 
     /**
      * @return the messageByteCount
      */
-    AtomicInteger getMessageByteCount() {
+    /* package */ AtomicInteger getMessageByteCount() {
         return messageByteCount;
     }
 
-    //FIXME: needs a better name
-    private final class OtherOpenCallback implements SessionFactory.OpenCallback {
+    private final class OpenChurningSessionCallback implements SessionFactory.OpenCallback {
 
-        final AtomicInteger selectorsCount = new AtomicInteger(topicSelectors.size());
-        final long sessionDurationSec;
+        private ScheduledExecutorService closeExecutor = Executors.newScheduledThreadPool(10);
+        private final AtomicInteger selectorsCount = new AtomicInteger(topicSelectors.size());
+        private final long sessionDurationSec;
 
-        public OtherOpenCallback(long sessionDurationSec) {
+        OpenChurningSessionCallback(long sessionDurationSec) {
             this.sessionDurationSec = sessionDurationSec;
         }
 
@@ -500,15 +494,9 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
         @Override
         public void onOpened(Session session) {
-            subscribe(topicSelectors, session, new CompletionCallback() {
+            subscribe(topicSelectors, session, new CompletionCallback.Default() {
                 @Override
-                public void onDiscard() {
-                    LOG.trace("SessionCreator#topics.onDiscard");
-                }
-
-                @Override
-                public void
-                    onComplete() {
+                public void onComplete() {
                     LOG.trace("SessionCreator#topics.onComplete");
                     if (selectorsCount.decrementAndGet() <= 0) {
                         setupDisconnectPhase(session, sessionDurationSec);
@@ -521,15 +509,21 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             }
             LOG.trace("Session open complete");
         }
+
+        private void setupDisconnectPhase(Session session, long sessionDuration) {
+            if (sessionDuration > 0) {
+                closeExecutor.schedule(new SessionCloseTask(session), sessionDuration, SECONDS);
+            }
+        }
     }
 
     private final class OpenCallback implements SessionFactory.OpenCallback {
         private final CountDownLatch sessionsLatch;
-        private final List<CountDownLatch> subscribeCdlList;
+        private final CountDownLatch subscriptionLatch;
 
-        private OpenCallback(CountDownLatch sessionsLatch,List<CountDownLatch> subscribeCdlList) {
+        private OpenCallback(CountDownLatch sessionsLatch, CountDownLatch subscriptionLatch) {
             this.sessionsLatch = sessionsLatch;
-            this.subscribeCdlList = subscribeCdlList;
+            this.subscriptionLatch = subscriptionLatch;
         }
 
         @Override
@@ -541,18 +535,17 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
 
         @Override
         public void onOpened(Session session) {
-            final CountDownLatch cdl = new CountDownLatch(topicSelectors.size());
             subscribe(topicSelectors, session, new CompletionCallback() {
                 @Override
                 public void onDiscard() {
                     LOG.trace("SessionCreator#topics.onDiscard");
-                    cdl.countDown();
+                    subscriptionLatch.countDown();
                 }
 
                 @Override
                 public void onComplete() {
                     LOG.trace("SessionCreator#topics.onComplete");
-                    cdl.countDown();
+                    subscriptionLatch.countDown();
                 }
             });
 
@@ -561,14 +554,13 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
             }
             LOG.trace("Session open complete");
             sessionsLatch.countDown();
-            subscribeCdlList.add(cdl);
         }
     }
 
     private class SessionCloseTask implements Runnable {
         private Session session;
 
-        public SessionCloseTask(Session session) {
+        SessionCloseTask(Session session) {
             this.session = session;
         }
 
@@ -591,7 +583,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
         }
 
         @Override
-        public void onTopicUpdate(String topic,Content content, UpdateContext context) {
+        public void onTopicUpdate(String topic, Content content, UpdateContext context) {
             updateCounters(topic, content.length());
         }
     }
@@ -601,7 +593,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
      */
     private final class JsonStream extends Topics.ValueStream.Default<JSON> {
         @Override
-        public void onValue(String topic,TopicSpecification arg1,JSON oldValue, JSON newValue) {
+        public void onValue(String topic, TopicSpecification arg1, JSON oldValue, JSON newValue) {
             updateCounters(topic, newValue.length());
         }
     }
@@ -611,7 +603,7 @@ import com.pushtechnology.diffusion.datatype.json.JSON;
      */
     private final class BytesValueStream extends Topics.ValueStream.Default<Bytes> {
         @Override
-        public void onValue(String topicPath,TopicSpecification specification, Bytes oldValue,Bytes newValue) {
+        public void onValue(String topicPath, TopicSpecification specification, Bytes oldValue, Bytes newValue) {
             updateCounters(topicPath, newValue.toByteArray().length);
         }
     }

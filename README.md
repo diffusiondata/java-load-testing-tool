@@ -32,6 +32,6 @@ For example:
 
     java -jar target/benchmark-0.10.0-script-SNAPSHOT.jar -sessions ws://localhost:8080 2 -myTopics foo/bar/100/1 foo/bar/100/2
     
-Frequently placing and closing a given number of sessions a second
+Frequently placing and closing (or 'churning') a given number of sessions a second:
 
     java -jar target/benchmark-0.10.0-script-SNAPSHOT.jar -myTopics foo/bar/100/1 /foo/bar/100/2 -sessionRate ws://localhost:8080 1 500 

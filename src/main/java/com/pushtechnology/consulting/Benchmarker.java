@@ -1,6 +1,21 @@
+/*******************************************************************************
+ * Copyright (C) 2017 Push Technology Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *******************************************************************************/
+
 package com.pushtechnology.consulting;
 
-import static com.pushtechnology.diffusion.client.topics.details.TopicType.SINGLE_VALUE;
+import static com.pushtechnology.diffusion.client.topics.details.TopicType.JSON;
 import static java.lang.Integer.parseInt;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.StringUtils.EMPTY;
@@ -23,7 +38,16 @@ import com.pushtechnology.diffusion.api.config.ThreadPoolConfig;
 import com.pushtechnology.diffusion.api.config.ThreadsConfig;
 import com.pushtechnology.diffusion.client.topics.details.TopicType;
 
+/**
+ * Bootstrap class.
+ *
+ * @author Push Technology Consulting
+ */
 public final class Benchmarker {
+
+    private Benchmarker() {
+        /* namespace */
+    }
 
     private static final Logger LOG = LoggerFactory.getLogger(Benchmarker.class);
 
@@ -69,7 +93,11 @@ public final class Benchmarker {
 
         if (arguments.doPublish) {
             LOG.info("Creating Publisher with connection string: '{}'", arguments.publisherConnectionString);
-            publisher = new Publisher(arguments.publisherConnectionString, arguments.publisherUsername, arguments.publisherPassword, arguments.topics,
+            publisher = new Publisher(
+                arguments.publisherConnectionString,
+                arguments.publisherUsername,
+                arguments.publisherPassword,
+                arguments.topics,
                 arguments.topicType);
             publisher.start();
 
@@ -77,11 +105,10 @@ public final class Benchmarker {
                 @Override
                 public void run() {
                     LOG.trace("publisherMonitor fired");
-                    LOG.info("Publisher " + ((publisher.isOnStandby()) ? "is" : "is not") + " on standby");
                     LOG.info("There are {} publishers running for topics: '{}'",
-                        publisher.getTopicUpdatersByTopic().size(),
-                        ArrayUtils.toString(publisher.getTopicUpdatersByTopic().keySet()));
-                    for (ScheduledFuture<?> svc : publisher.getTopicUpdatersByTopic().values()) {
+                        publisher.getUpdaterFuturessByTopic().size(),
+                        ArrayUtils.toString(publisher.getUpdaterFuturessByTopic().keySet()));
+                    for (ScheduledFuture<?> svc : publisher.getUpdaterFuturessByTopic().values()) {
                         if (svc.isCancelled()) {
                             LOG.debug("Service is cancelled...");
                         }
@@ -92,7 +119,8 @@ public final class Benchmarker {
                     LOG.trace("Done publisherMonitor fired");
                 }
             }, 2L, 5L, SECONDS);
-        } else {
+        }
+        else {
             publisher = null;
         }
 
@@ -158,7 +186,7 @@ public final class Benchmarker {
     }
 
     private static final class Arguments {
-        /** Create and regularly update topics */
+        /** Create and regularly update topics. */
         /* package */ boolean doPublish;
         /* package */ String publisherConnectionString;
         /* package */ String publisherUsername = EMPTY;
@@ -175,10 +203,10 @@ public final class Benchmarker {
         /* package */ int sessionDuration;
 
         /* package */ List<String> paramTopics = new ArrayList<>();
-        /** Subscribed topics */
+        /** Subscribed topics. */
         /* package */ List<String> myTopics = new ArrayList<>();
         /* package */ List<String> topics = new ArrayList<>();
-        /* package */ TopicType topicType = SINGLE_VALUE;
+        /* package */ TopicType topicType = JSON;
         /* package */ int connectThreadPoolSize = 10;
 
         /**
@@ -194,7 +222,7 @@ public final class Benchmarker {
             }
 
             final String errStr = "'%s' takes %d parameters, please check the usage and try again";
-            for (int i = 0;i < args.length;i++) {
+            for (int i = 0; i < args.length; i++) {
                 final String arg = args[i];
                 switch (arg) {
 
@@ -307,12 +335,11 @@ public final class Benchmarker {
             return result;
         }
 
-        private static boolean hasNext(String[] args,int index,int numNeeded) {
+        private static boolean hasNext(String[] args, int index, int numNeeded) {
             return args.length > (index + numNeeded);
         }
 
-        private static void usage(int exitCode,String err,Object... args) {
-            // FIXME: undocumented options like multiiphosts, etc.
+        private static void usage(int exitCode, String err, Object... args) {
             LOG.info(err, args);
             System.out.println("");
             System.out.println("Usage: JavaBenchmarkSuite.jar [params]");

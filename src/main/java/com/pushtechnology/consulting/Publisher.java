@@ -1,3 +1,18 @@
+/*******************************************************************************
+ * Copyright (C) 2017 Push Technology Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *******************************************************************************/
+
 package com.pushtechnology.consulting;
 
 import static com.pushtechnology.consulting.Benchmarker.CreatorState.INITIALISED;
@@ -5,6 +20,7 @@ import static com.pushtechnology.consulting.Benchmarker.CreatorState.SHUTDOWN;
 import static com.pushtechnology.consulting.Benchmarker.CreatorState.STARTED;
 import static com.pushtechnology.diffusion.client.topics.details.TopicType.BINARY;
 import static com.pushtechnology.diffusion.client.topics.details.TopicType.JSON;
+import static java.lang.Integer.parseInt;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 import java.nio.ByteBuffer;
@@ -14,83 +30,66 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
 
-import org.apache.commons.lang3.ArrayUtils;
-import org.apache.commons.lang3.math.NumberUtils;
+import org.json.simple.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.pushtechnology.consulting.Benchmarker.CreatorState;
 import com.pushtechnology.diffusion.client.Diffusion;
-import com.pushtechnology.diffusion.client.callbacks.ErrorReason;
-import com.pushtechnology.diffusion.client.features.RegisteredHandler;
-import com.pushtechnology.diffusion.client.features.Topics;
-import com.pushtechnology.diffusion.client.features.Topics.CompletionCallback;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicAddFailReason;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicControl;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicControl.AddCallback;
-import com.pushtechnology.diffusion.client.features.control.topics.TopicControl.MissingTopicHandler;
-import com.pushtechnology.diffusion.client.features.control.topics.TopicControl.MissingTopicNotification;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicUpdateControl;
-import com.pushtechnology.diffusion.client.features.control.topics.TopicUpdateControl.UpdateSource;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicUpdateControl.Updater;
 import com.pushtechnology.diffusion.client.features.control.topics.TopicUpdateControl.Updater.UpdateCallback;
 import com.pushtechnology.diffusion.client.session.Session;
 import com.pushtechnology.diffusion.client.session.Session.ErrorHandler;
 import com.pushtechnology.diffusion.client.session.Session.Listener;
-import com.pushtechnology.diffusion.client.session.Session.SessionError;
 import com.pushtechnology.diffusion.client.session.Session.State;
 import com.pushtechnology.diffusion.client.session.SessionFactory;
-import com.pushtechnology.diffusion.client.topics.details.TopicDetails;
 import com.pushtechnology.diffusion.client.topics.details.TopicType;
 import com.pushtechnology.diffusion.datatype.binary.Binary;
 import com.pushtechnology.diffusion.datatype.binary.BinaryDataType;
 import com.pushtechnology.diffusion.datatype.json.JSON;
 import com.pushtechnology.diffusion.datatype.json.JSONDataType;
 
+/**
+ * Create and regularly update a set of topics.
+ *
+ * @author Push Technology Consulting.
+ */
 /*package*/ final class Publisher {
     private static final Logger LOG = LoggerFactory.getLogger(Publisher.class);
 
     private final String connectionString;
-    private final String rootTopic;
     private final TopicType topicType;
     private SessionFactory sessionFactory;
 
     private Session session;
-    private TopicControl topicControl;
-    private TopicUpdateControl topicUpdateControl;
     private Updater updater;
-    private Map<String,ScheduledFuture<?>> topicUpdatersByTopic = new HashMap<>();
-    private boolean onStandby = true;
-    private List<String> topicStandbyList = new ArrayList<>();
+    private Map<String, ScheduledFuture<?>> updaterFuturessByTopic = new HashMap<>();
+    private List<ValidatedTopicPath> topicPaths;
     private CreatorState state;
-    private RandomString randomString;
+    private RandomStringSource randomStrings = new RandomStringSource();
 
-    public Publisher(String connectionString,String username,String password,
-        final List<String> topics,TopicType topicType) {
+    Publisher(String connectionString, String username, String password, final List<String> topics, TopicType topicType) {
         LOG.trace("Publisher constructor");
 
         this.connectionString = connectionString;
-        this.rootTopic = topics.get(0).split("/")[0];
         this.topicType = topicType;
+        this.topicPaths = ValidatedTopicPath.parse(topics);
 
         this.sessionFactory = Diffusion.sessions().noReconnection().connectionTimeout(10000);
         if (!username.isEmpty()) {
             this.sessionFactory = this.sessionFactory.principal(username);
-            if (!password.isEmpty()) {
-                this.sessionFactory = this.sessionFactory.password(password);
-            }
         }
-        this.sessionFactory = this.sessionFactory.errorHandler(new ErrorHandler() {
-
-                @Override
-                public void onError(Session session, SessionError err) {
-                    LOG.error("SessionCreator#sessionFactory.onError : '{}'", err.getMessage());
-                }
-
-            }).listener(new Listener() {
-
+        if (!password.isEmpty()) {
+            this.sessionFactory = this.sessionFactory.password(password);
+        }
+        this.sessionFactory = this.sessionFactory
+            .errorHandler(new ErrorHandler.Default())
+            .listener(new Listener() {
                 @Override
                 public void onSessionStateChanged(Session theSession, State oldState, State newState) {
                     LOG.trace("Publisher#sessionFactory.onSessionStateChanged");
@@ -99,9 +98,7 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
                     case CONNECTED_ACTIVE:
                         LOG.debug("Session state is active registeringTopicControlAndSource...");
                         session = theSession;
-                        registerTopicControlAndSource();
-                        LOG.debug("Subscribing to topics...");
-                        subscribeToTopics(topics);
+                        updater = session.feature(TopicUpdateControl.class).updater();
                         break;
                     default:
                         break;
@@ -115,210 +112,73 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
         LOG.trace("Done Publisher constructor");
     }
 
-    void stopAllFeeds() {
+    private void stopAllFeeds() {
         LOG.trace("Publisher#stopAllFeeds");
         LOG.debug("Stopping all feeds...");
-        for (ScheduledFuture<?> future : topicUpdatersByTopic.values()) {
+        for (ScheduledFuture<?> future : updaterFuturessByTopic.values()) {
             future.cancel(false);
         }
         LOG.trace("Done Publisher#stopAllFeeds");
     }
 
-    void registerTopicControlAndSource() {
-        LOG.trace("Publisher#registerTopicControlAndSource");
-
-        LOG.debug("Setting up topic control...");
-        this.topicControl = this.session.feature(TopicControl.class);
-        this.topicControl.addMissingTopicHandler(rootTopic,
-            new MissingTopicHandler() {
-
-                @Override
-                public void onClose(String topicPath) {
-                    LOG.trace("MissingTopicHandler#OnClose for topic '{}'", topicPath);
-                }
-
-                @Override
-                public void onActive(String topicPath,
-                    RegisteredHandler registeredHandler) {
-                    LOG.info("MissingTopicHandler active for topic '{}'", topicPath);
-                }
-
-                @Override
-                public void
-                    onMissingTopic(MissingTopicNotification notification) {
-                    LOG.trace("Publisher#missingTopicHandler.OnMissingTopic");
-                    String topicPath = notification.getTopicPath();
-                    LOG.info("OnMissingTopic called for '{}'", topicPath);
-                    createTopic(topicPath, topicType);
-                    notification.proceed();
-                    LOG.trace("Done Publisher#missingTopicHandler.OnMissingTopic");
-                }
-            });
-
-        LOG.debug("Setting up topic update control (source)...");
-        this.topicUpdateControl = this.session.feature(TopicUpdateControl.class);
-        this.topicUpdateControl.registerUpdateSource(rootTopic, new UpdateSource.Default() {
-
-                @Override
-                public void onClose(String topicPath) {
-                    LOG.trace("Publisher#TopicSource.onClosed");
-                    Publisher.this.updater = null;
-                    shutdown();
-                    LOG.trace("Done Publisher#TopicSource.onClosed");
-                }
-
-                @Override
-                public void onActive(String topicPath, Updater updater) {
-                    LOG.trace("Publisher#TopicSource.onActive");
-                    onStandby = false;
-                    Publisher.this.updater = updater;
-
-                    for (String topic : topicStandbyList) {
-                        startFeed(topic);
-                    }
-                    LOG.trace("Done Publisher#TopicSource.onActive");
-                }
-
-                @Override
-                public void onStandby(String topicPath) {
-                    LOG.trace("Publisher#TopicSource.onStandby");
-                    onStandby = true;
-                    stopAllFeeds();
-                    LOG.trace("Done Publisher#TopicSource.onStandby");
-                }
-            });
-
-        LOG.trace("Done Publisher#registerTopicControlAndSource");
-    }
-
-    void subscribeToTopics(List<String> topics) {
-        LOG.debug("Subscribing to topics: '{}'", ArrayUtils.toString(topics));
-        for (String topic : topics) {
-            final String sel = ">" + topic;
-            LOG.debug("Subscribing to topic '{}'", sel);
-            final Topics topicFeature = session.feature(Topics.class);
-            topicFeature.addTopicStream(sel, new Topics.TopicStream.Default() {
-
-                @Override
-                public void onSubscription(String topicPath, TopicDetails details) {
-                    startFeed(topicPath);
-                }
-
-            });
-
-            topicFeature.subscribe(sel, new CompletionCallback.Default(){});
-        }
-    }
-
-    void createTopic(String topicPath, TopicType topicType) {
+    private void createTopic(ValidatedTopicPath validatedTopicPath) {
         LOG.trace("Publisher#createTopic");
-        LOG.debug("Creating topic '{}' of type '{}'", topicPath, topicType);
-        this.topicControl.addTopic(topicPath, topicType, new AddCallback() {
+        LOG.debug("Creating topic '{}' of type '{}'", validatedTopicPath, topicType);
 
-            @Override
-            public void onDiscard() {
-                LOG.error("Publisher#TopicControlAddCallbackImpl.onDiscard() :: Notification that a call context was closed prematurely, typically due to a timeout or the session being closed.");
-            }
+        this.session.feature(TopicControl.class).addTopic(validatedTopicPath.getPath(), topicType, new AddCallback.Default() {
 
             @Override
             public void onTopicAdded(String topicPath) {
                 LOG.info("Topic '{}' added.", topicPath);
-                startFeed(topicPath);
+                startFeed(validatedTopicPath);
             }
 
             @Override
-            public void onTopicAddFailed(String topicPath,
-                TopicAddFailReason reason) {
+            public void onTopicAddFailed(String topicPath, TopicAddFailReason reason) {
                 LOG.trace("Publisher#TopicControlAddCallback.onTopicAddFailed");
-                LOG.debug("topicAddFailed path: '{}', reason: '{}'", topicPath,
-                    reason);
+                LOG.debug("topicAddFailed path: '{}', reason: '{}'", topicPath, reason);
                 switch (reason) {
                 case EXISTS:
-                    startFeed(topicPath);
+                    startFeed(validatedTopicPath);
                     break;
                 default:
-                    LOG.error("Adding topic: '{}' failed for reason: '{}'",
-                        topicPath, reason);
+                    LOG.error("Adding topic: '{}' failed for reason: '{}'", topicPath, reason);
                     break;
                 }
-                LOG.trace(
-                    "Done Publisher#TopicControlAddCallback.onTopicAddFailed");
+                LOG.trace("Done Publisher#TopicControlAddCallback.onTopicAddFailed");
             }
         });
         LOG.trace("Done Publisher#createTopic");
     }
 
-    /**
-     * FIXME: more detail on this needed.
-     * 1 - path 2 - path 3 - messageSizeInBytes 4 - messagesPerSecond
-     *
-     * @param topicPath
-     */
-    void startFeed(final String topicPath) {
+    private void startFeed(final ValidatedTopicPath topicPath) {
         LOG.trace("Publisher#startFeed for '{}'", topicPath);
-        if (onStandby) {
-            LOG.debug("Publisher#startFeed : OnStandby, adding to list and waiting...");
-            topicStandbyList.add(topicPath);
+
+        LOG.debug("Using messageSizeInBytes: '{}' and messagesPerSecond: '{}'", topicPath.getMessageSize(), topicPath.getFrequency());
+        if (updaterFuturessByTopic.containsKey(topicPath.getPath())) {
+            LOG.debug("Service is already running for topic '{}'", topicPath);
             return;
         }
-        LOG.debug("Trying to start feed for: '{}'", topicPath);
-        final String[] paths = topicPath.split("/");
-        final int expectedLength = 4;
-        if (paths.length == 4) {
-            LOG.debug("Found topicPath '{}' elements: '{}', '{}', '{}'", topicPath, paths[0] + "/" + paths[1], paths[2], paths[3]);
-            final int messageSizeInBytes = NumberUtils.toInt(paths[2], -1);
-            randomString = new RandomString(messageSizeInBytes);
-            final int messagesPerSecond = NumberUtils.toInt(paths[3], -1);
-            if (messageSizeInBytes > 0 && messagesPerSecond > 0 && messagesPerSecond <= 1000) {
-                LOG.debug("Using messageSizeInBytes: '{}' and messagesPerSecond: '{}'", messageSizeInBytes, messagesPerSecond);
-                ScheduledFuture<?> tmpFuture;
-                if (topicUpdatersByTopic.containsKey(topicPath)) {
-                    LOG.trace("Service already found, trying to pull by topicPath '{}'", topicPath);
-                    tmpFuture = topicUpdatersByTopic.get(topicPath);
-                    if (!tmpFuture.isDone() && !tmpFuture.isCancelled()) {
-                        LOG.debug("Service is already running for topic '{}'", topicPath);
-                        return;
-                    }
-                }
-                else {
-                    LOG.debug("Service not found, creating for '{}'", topicPath);
-                }
-                final Long scheduleIntervalInMillis = new Long(1000 / messagesPerSecond);
-                LOG.info("Updating topic path {}', every '{}' ms", topicPath, scheduleIntervalInMillis);
-                tmpFuture = Benchmarker.globalThreadPool.scheduleAtFixedRate(new Runnable() {
-
-                        @Override
-                        public void run() {
-                            LOG.debug("updater.update() for topic path: '{}' {}", topicPath, messageSizeInBytes);
-                            update(topicPath, new UpdateCallback() {
-
-                                @Override
-                                public void onError(ErrorReason error) {
-                                    LOG.error("Error : '{}'", error);
-                                }
-
-                                @Override
-                                public void onSuccess() {
-                                    LOG.debug("Topic updated");
-                                }
-                            }, false, messageSizeInBytes);
-                        }
-                    }, 0L, scheduleIntervalInMillis, MILLISECONDS);
-                LOG.debug("Started updater for '{}'", topicPath);
-                topicUpdatersByTopic.put(topicPath, tmpFuture);
-            }
-            else {
-                LOG.error("Could not parse topicPath: '{}', found messageSizeInBytes: '{}' and messagesPerSecond: {}'", topicPath, messageSizeInBytes, messagesPerSecond);
-            }
-        }
         else {
-            LOG.error("Could not parse topicPath '{}', length was : {}, expected {}", expectedLength, topicPath, paths.length);
+            LOG.debug("Service not found, creating for '{}'", topicPath);
         }
+        final long scheduleIntervalInMillis = 1000 / topicPath.getFrequency();
+        LOG.info("Updating topic path {}', every '{}' ms", topicPath, scheduleIntervalInMillis);
+        final ScheduledFuture<?> future = Benchmarker.globalThreadPool.scheduleAtFixedRate(new Runnable() {
+            @Override
+            public void run() {
+                LOG.debug("updater.update() for topic path: '{}'", topicPath);
+                update(topicPath.getPath(), new UpdateCallback.Default(), false, topicPath.getMessageSize());
+            }
+        }, 0L, scheduleIntervalInMillis, MILLISECONDS);
+        LOG.debug("Started updater for '{}'", topicPath);
+        updaterFuturessByTopic.put(topicPath.getPath(), future);
+
         LOG.trace("Done Publisher#startFeed for '{}'", topicPath);
     }
 
-    private void update(final String selector,UpdateCallback cb,
-        boolean hasInitialContent,int messageSizeInBytes) {
+    @SuppressWarnings("unchecked")
+    private void update(final String selector, UpdateCallback cb, boolean hasInitialContent, int messageSizeInBytes) {
         try {
             if (topicType == BINARY) {
                 final byte[] bytes = ByteBuffer.allocate(messageSizeInBytes).putLong(System.nanoTime()).array();
@@ -329,59 +189,41 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
                     .update(selector, b, cb);
             }
             else if (topicType == JSON) {
-                final String jsonString =
-                    "{ \"Time\" : \"" + System.nanoTime() +
-                    "\", \"Data\" : \"" + randomString.nextString() + "\"}";
+                final JSONObject obj = new JSONObject();
+                obj.put("time", System.nanoTime());
+                obj.put("data", randomStrings.nextString(messageSizeInBytes));
+
                 final JSONDataType jsonDataType = Diffusion.dataTypes().json();
-                final JSON json = jsonDataType.fromJsonString(jsonString);
+                final JSON json = jsonDataType.fromJsonString(obj.toJSONString());
                 Publisher.this.updater
                     .valueUpdater(JSON.class)
                     .update(selector, json, cb);
             }
             else {
-                Publisher.this.updater.update(selector, Diffusion.content().newContent(createSizedByteArray(messageSizeInBytes)), cb);
+                Publisher.this.updater.update(selector, Diffusion.content().newContent(randomStrings.nextString(messageSizeInBytes)), cb);
             }
 
         }
         catch (Exception e) {
             e.printStackTrace();
-            LOG.error("Error in publisher loop " + e.getMessage(), e);
+            LOG.error("Error in publisher loop", e);
         }
-    }
-
-    byte[] createSizedByteArray(int messageSizeInBytes) {
-        byte[] bytes = new byte[messageSizeInBytes];
-        ThreadLocalRandom.current().nextBytes(bytes);
-        return bytes;
-    }
-
-    void stopFeed(String topicPath) {
-        LOG.trace("Publisher#stopFeed for '{}'", topicPath);
-        LOG.debug("Trying to stop feed for: '{}'", topicPath);
-        if (topicUpdatersByTopic.containsKey(topicPath)) {
-            LOG.info("Stopping topic feed for '{}'", topicPath);
-            topicUpdatersByTopic.get(topicPath).cancel(false);
-        }
-        LOG.trace("Done Publisher#stopFeed for '{}'", topicPath);
     }
 
     public void start() {
         LOG.trace("Publisher#start");
         switch (state) {
         case INITIALISED:
-            doStart();
+            this.session = this.sessionFactory.open(this.connectionString);
+            for (ValidatedTopicPath topicPath : topicPaths) {
+                createTopic(topicPath);
+            }
             state = STARTED;
             break;
         default:
             break;
         }
         LOG.trace("Done Publisher#start");
-    }
-
-    private void doStart() {
-        LOG.trace("Publisher#doStart");
-        this.session = this.sessionFactory.open(this.connectionString);
-        LOG.trace("Done Publisher#doStart");
     }
 
     public void shutdown() {
@@ -398,47 +240,104 @@ import com.pushtechnology.diffusion.datatype.json.JSONDataType;
     }
 
     /**
-     * @return the topicUpdatersByTopic
+     * @return the updaterFuturessByTopic
      */
-    Map<String,ScheduledFuture<?>> getTopicUpdatersByTopic() {
-        return topicUpdatersByTopic;
+    /*package*/ Map<String, ScheduledFuture<?>> getUpdaterFuturessByTopic() {
+        return updaterFuturessByTopic;
     }
 
     /**
-     * @return the onStandby
+     * Source of random strings.
      */
-    boolean isOnStandby() {
-        return onStandby;
-    }
+    static final class RandomStringSource {
 
-    //FIXME: javadocs, or a btter name
-    class RandomString {
-
-        private char[] symbols;
+        private static final char[] ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz".toCharArray();
         private final Random random = new Random();
-        private final char[] buf;
 
-        public RandomString(int length) {
-
-            StringBuilder tmp = new StringBuilder();
-            for (char ch = '0';ch <= '9';++ch)
-                tmp.append(ch);
-            for (char ch = 'a';ch <= 'z';++ch)
-                tmp.append(ch);
-            symbols = tmp.toString().toCharArray();
-
-            if (length < 1)
-                throw new IllegalArgumentException("length < 1: " + length);
-            buf = new char[length];
-        }
-
-        public String nextString() {
-            for (int idx = 0;idx < buf.length;++idx) {
-                buf[idx] = symbols[random.nextInt(symbols.length)];
+        public String nextString(int length) {
+            final StringBuilder result = new StringBuilder(length);
+            for (int i = 0; i < length; i++) {
+                result.append(ALPHABET[random.nextInt(ALPHABET.length)]);
             }
-            return new String(buf);
+            return result.toString();
         }
     }
 
+    /**
+     * Non mutable topic path adhering to the pattern string/string/size-in-bytes/messages-per-second
+     * <p>
+     * {@code size-in-bytes} and {@code messages-per-second} are decimal integers.
+     * {@code size-in-bytes} must be positive.
+     * {@code messages-per-second} must be positive and less than 1,000.
+     */
+    private static final class ValidatedTopicPath {
+        private final String path;
+        private final int messageSize;
+        private final int frequency;
+
+        /*package*/ ValidatedTopicPath(String path, int messageSize, int frequency) {
+            this.path = path;
+            this.messageSize = messageSize;
+            this.frequency = frequency;
+        }
+
+        /*package*/ static List<ValidatedTopicPath> parse(List<String> topics) {
+            final List<ValidatedTopicPath> result = new ArrayList<>(topics.size());
+            for (String topic : topics) {
+                result.add(parse(topic));
+            }
+            return result;
+        }
+
+        /*package*/ static ValidatedTopicPath parse(String topicPath) {
+            final String[] paths = topicPath.split("/");
+            if (paths.length != 4) {
+                throw new IllegalArgumentException("Too few elements, need 4: " + topicPath);
+            }
+
+            try {
+                final int messageSizeInBytes = parseInt(paths[2]);
+                if (messageSizeInBytes < 0) {
+                    throw new IllegalArgumentException("messageSizeInBytes must be positive: " + topicPath);
+                }
+
+                final int messagesPerSecond = parseInt(paths[3]);
+                if (messagesPerSecond < 0 || messagesPerSecond > 1000) {
+                    throw new IllegalArgumentException("messagesPerSecond must be in the range 1..1000: " + topicPath);
+                }
+
+                return new ValidatedTopicPath(topicPath, messageSizeInBytes, messagesPerSecond);
+            }
+            catch (NumberFormatException ex) {
+                throw new IllegalArgumentException("Expecting numeric values in topic path elements 2 and 3: " + topicPath, ex);
+            }
+        }
+
+        /**
+         * @return the path
+         */
+        String getPath() {
+            return path;
+        }
+
+        /**
+         * @return the messageSize
+         */
+        int getMessageSize() {
+            return messageSize;
+        }
+
+        /**
+         * @return the number of updates a second
+         */
+        int getFrequency() {
+            return frequency;
+        }
+
+        @Override
+        public String toString() {
+            return path;
+        }
+    }
 
 }
