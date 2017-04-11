@@ -1,0 +1,23 @@
+LoadView Testing -
+
+a cloud based load testing tool that works along side of the EveryStep Scripting Tool to test Java. 
+
+LoadView can perform very basic load testing by itself, but for more meaningful testing, you'll need to download and install the EveryStep script recording tool. That process takes less than five minutes and is well worth the effort.
+
+ 
+
+EveryStep allows you to easily record test scripts by pointing and clicking. To start, you enter your starting URL and select which browser you want to emulate in this test. EveryStep currently offers a choice of over 42 browser emulations – everything from Chrome and Internet Explorer to iPhone, Google Nexus, and Samsung Galaxy. This breadth of options allows for impressively thorough load testing.
+
+Recording a test script in EveryStep is quick and straightforward. Just click around the site and EveryStep logs your every move. Navigating to a new web page while recording brings up a prompt to add content validation. (EveryStep also offers the option to disable automatic launch of this window if you prefer.) You have the option to specify text or an image to validate – a welcome bit of flexibility.
+
+Stop recording, and EveryStep prompts you to run the script to check for errors before saving or uploading the script. Be sure to save the device to LoadView Stress Testing and now UserView Monitoring, the other testing solution that interfaces with EveryStep.
+
+ 
+
+EveryStep makes recording test scripts easy and uncomplicated, so you can quickly move on to setting up and performing the test.
+
+ 
+
+Use Everystep and LoadView together to test Java on any website or web app, on any device. It's so simple.
+
+ 
